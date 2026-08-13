@@ -9,6 +9,7 @@ import {
   DEMO_SCOPE,
   DEMO_SIGNAL,
 } from "../context-loop/fixtures.ts";
+import { embedText } from "../context-loop/embedding.ts";
 import { deriveDecision, retrieveContext, resumeRun } from "../context-loop/engine.ts";
 import type { ContextUnit, Decision, RetrievalAudit, Run } from "../context-loop/types.ts";
 import type { PriorDecision } from "../context-loop/types.ts";
@@ -37,7 +38,10 @@ export type DemoAudit = RetrievalAudit & {
   dealId: string;
   query: string;
   createdAt: string;
-  filter: typeof DEMO_SCOPE & { active: true };
+  filter: typeof DEMO_SCOPE & {
+    active: true;
+    kind?: { $in: readonly ["prior_decision", "signal"] };
+  };
   retrieval: RetrievalStatus;
   candidates: DemoAuditCandidate[];
   packetHash: string;
@@ -55,18 +59,65 @@ export type DemoRun = Run & {
   decision?: Decision;
 };
 
+export type DemoSourceType =
+  | "internal_memo"
+  | "company_update"
+  | "public_web"
+  | "pitch_deck"
+  | "document"
+  | "memory";
+
+export type DemoSourceVisibility = "public" | "private" | "synthetic";
+
+export type DemoSourceLocator = {
+  kind: "web" | "page";
+  value: string;
+};
+
+export type DemoSource = {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceType: DemoSourceType;
+  visibility: DemoSourceVisibility;
+  canonicalUrl?: string;
+  eventTime?: string;
+  publishedAt?: string;
+  retrievedAt: string;
+  locator?: DemoSourceLocator;
+  contentFingerprint: string;
+  text: string;
+  selected: boolean;
+  score?: number;
+  selectionReason?: string;
+};
+
+type StoredProvenance = {
+  title: string;
+  publisher: string;
+  sourceType: DemoSourceType;
+  visibility: DemoSourceVisibility;
+  canonicalUrl?: string;
+  publishedAt?: Date;
+  retrievedAt: Date;
+  locator?: DemoSourceLocator;
+  contentFingerprint: string;
+};
+
 export type RepositoryRetrievedContext = Omit<ContextUnit, "embedding"> & {
   score: number;
   kind?: "prior_decision" | "signal" | "context";
   eventTime?: Date;
   priorDecision?: PriorDecision;
   signal?: { metric: string; value: number };
+  provenance?: StoredProvenance;
 };
 
 export type DemoSnapshot = {
   scope: typeof DEMO_SCOPE;
   persistence: PersistenceMode;
   contextUnitCount: number;
+  sources: DemoSource[];
   runs: DemoRun[];
   audits: DemoAudit[];
   then: PriorDecision | null;
@@ -104,6 +155,11 @@ export interface ContextRepository {
 }
 
 const PARTNER_MEMO_HOURLY_LIMIT = 30;
+const DEMO_RETRIEVAL_FILTER = {
+  ...DEMO_SCOPE,
+  active: true,
+  kind: { $in: ["prior_decision", "signal"] },
+} as const;
 
 type PartnerGenerationClaim = {
   workspaceId: string;
@@ -130,6 +186,102 @@ function completedDecision(): Decision {
   return deriveDecision(DEMO_PRIOR_DECISION, DEMO_SIGNAL);
 }
 
+function contentFingerprint(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function safeHttpUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (/^\/source-corpus\/[A-Za-z0-9._-]+$/.test(value)) return value;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const LEGACY_CORPUS = [
+  ["doc_7bridges", "7bridges-Pitch-Deck.pdf", "7bridges Pitch Deck", "pitch_deck", "698a582d94484808c419aab4602a72aa36612fdafebba56a690be3bea848d47a", "7bridges (deal_7bridges)"],
+  ["doc_100plus", "100Plus-Pitch-Deck.pdf", "100Plus Pitch Deck", "pitch_deck", "19da3271e744515b4fa4cee7e3edf457675f65235e6e04de1efe68c101b56b42", "100Plus (deal_100plus)"],
+  ["doc_1906", "1906-Pitch-Deck.pdf", "1906 Pitch Deck", "pitch_deck", "39ab6ab176e6ac52ac084eb3ca0317cdfd9c247297623554fb10a426779ea088", "1906 (deal_1906)"],
+  ["doc_a_champs", "A-Champs-Pitch-Deck.pdf", "A-Champs Pitch Deck", "pitch_deck", "7141e76e4ef7c4841288ecdb6c6615d58f7dc8b1822c7a9b452ceaff31f17420", "A-Champs (deal_a_champs)"],
+  ["doc_ably", "Ably-Pitch-Deck.pdf", "Ably Pitch Deck", "pitch_deck", "94bfc9dd6f07119d6940a1fe2a695fa90ef7c371f2e30d0fba05c4bc736b9b4b", "Ably (deal_ably)"],
+  ["doc_acin", "Acin-Pitch-Deck.pdf", "Acin Pitch Deck", "pitch_deck", "29eb7a5b6d58632f7118e696e3b58259ab9471ae2b0921b471aeb2deb43aa988", "Acin (deal_acin)"],
+  ["doc_acquco", "Acquco-Pitch-Deck.pdf", "Acquco Pitch Deck", "pitch_deck", "39e4bdef030541dacd57f545943f27b6e179b891684bd1dbe88119e871b11a8e", "Acquco (deal_acquco)"],
+  ["doc_ada_health", "Ada-Health-Pitch-Deck.pdf", "Ada Health Pitch Deck", "pitch_deck", "e2e0d053252c2f4e2d9c4e066457baf5ff3cea9320a1f208e305628a19d92d6a", "Ada Health (deal_ada_health)"],
+  ["doc_pitch_combined", "Pitch-combined-InterTwin-AI.pdf", "Combined Startup One-Pagers", "pitch_deck", "8d70a43a869658105c104fcb711f3323032f07819267e54e474833e185c2e979", "11 authorized startup one-pagers with page-level deal mapping"],
+  ["report_venture_outlook_2026", "2026-US-Venture-Capital-Outlook-Midyear-Update.pdf", "2026 US Venture Capital Outlook — Midyear Update", "document", "a817f4352e539fb54aa1b58d9f2fb2721900a09636cda7806e54654d14f164cb", "market report"],
+  ["report_ai_vc_trends_q1_2026", "Q1-2026-AI-VC-Trends.pdf", "Q1 2026 AI VC Trends", "document", "087566845aaf80aa63fc434413d18d597c59a65b9f92416ea767999b8d24391f", "market report"],
+  ["report_robotics_physical_ai_q1_2026", "Q1-2026-Robotics-and-Physical-AI-VC-Trends.pdf", "Q1 2026 Robotics and Physical AI VC Trends", "document", "3f082b87dc1e8ae2616bdf684d9b7396b2d1d2984714ada5ae5f1b846d1490b5", "market report"],
+  ["report_silicon_photonics_2024", "Silicon-Photonics-2024-SOI-SiN-LNO.pdf", "Silicon Photonics 2024: SOI, SiN and LNO", "document", "dabf8c3049e6138359e3ebabe237895c118b71d60f10ec34190a4b5820726cbc", "market report"],
+  ["reference_vc_brain", "The-VC-Brain.pdf", "The VC Brain", "document", "e225b5c65fd84617373ef86b5737d29fff0ff45994f3013df03f2a4acd9a89a9", "reference document"],
+] as const satisfies readonly (readonly [string, string, string, "pitch_deck" | "document", string, string])[];
+
+function defaultProvenance(unit: {
+  id: string;
+  kind?: StoredContext["kind"];
+  text: string;
+  eventTime?: Date;
+}): StoredProvenance {
+  const retrievedAt = unit.eventTime ?? new Date("2026-08-13T00:00:00.000Z");
+  return {
+    title:
+      unit.kind === "prior_decision"
+        ? "Synthetic prior decision memo"
+        : unit.kind === "signal"
+          ? "Synthetic company update"
+          : unit.id,
+    publisher: "VSee demo",
+    sourceType:
+      unit.kind === "prior_decision" ? "internal_memo" : "company_update",
+    visibility: "synthetic",
+    retrievedAt,
+    contentFingerprint: contentFingerprint(unit.text),
+  };
+}
+
+function sourcesFromUnits(
+  units: StoredContext[],
+  audits: DemoAudit[],
+): DemoSource[] {
+  const latestAudit = audits.at(-1);
+  const selection = new Map(
+    latestAudit?.candidates.map((candidate) => [candidate.id, candidate]) ?? [],
+  );
+  return units.map((unit) => {
+    const provenance = unit.provenance ?? defaultProvenance(unit);
+    const selected = selection.get(unit.id);
+    const canonicalUrl = safeHttpUrl(provenance.canonicalUrl);
+    const locator =
+      provenance.locator?.kind === "web"
+        ? canonicalUrl
+          ? { kind: "web" as const, value: canonicalUrl }
+          : undefined
+        : provenance.locator;
+    return {
+      id: unit.id,
+      title: provenance.title,
+      publisher: provenance.publisher,
+      sourceType: provenance.sourceType,
+      visibility: provenance.visibility,
+      ...(canonicalUrl ? { canonicalUrl } : {}),
+      ...(unit.eventTime ? { eventTime: unit.eventTime.toISOString() } : {}),
+      ...(provenance.publishedAt
+        ? { publishedAt: provenance.publishedAt.toISOString() }
+        : {}),
+      retrievedAt: provenance.retrievedAt.toISOString(),
+      ...(locator ? { locator } : {}),
+      contentFingerprint: provenance.contentFingerprint,
+      text: unit.text,
+      selected: selected !== undefined,
+      ...(selected ? { score: selected.score, selectionReason: selected.reason } : {}),
+    };
+  });
+}
+
 function buildAudit(
   id: string,
   selected: RepositoryRetrievedContext[],
@@ -142,7 +294,7 @@ function buildAudit(
     reason: "Selected by the fixed-scope retrieval packet.",
   }));
   const packetHash = createHash("sha256")
-    .update(JSON.stringify({ filter: { ...DEMO_SCOPE, active: true }, candidates }))
+    .update(JSON.stringify({ filter: DEMO_RETRIEVAL_FILTER, candidates }))
     .digest("hex");
   return {
     id,
@@ -150,7 +302,7 @@ function buildAudit(
     query: DEMO_QUERY,
     selectedUnitIds: selected.map((unit) => unit.id),
     createdAt,
-    filter: { ...DEMO_SCOPE, active: true },
+    filter: DEMO_RETRIEVAL_FILTER,
     retrieval,
     candidates,
     packetHash,
@@ -207,15 +359,24 @@ export class InMemoryContextRepository implements ContextRepository {
   }
 
   async getSnapshot(): Promise<DemoSnapshot> {
+    const activeUnits = this.units.filter(
+      (unit) =>
+        unit.active &&
+        unit.workspaceId === DEMO_SCOPE.workspaceId &&
+        unit.dealId === DEMO_SCOPE.dealId,
+    );
     return clone({
       scope: DEMO_SCOPE,
       persistence: this.persistence,
-      contextUnitCount: this.units.filter(
-        (unit) =>
-          unit.active &&
-          unit.workspaceId === DEMO_SCOPE.workspaceId &&
-          unit.dealId === DEMO_SCOPE.dealId,
-      ).length,
+      contextUnitCount: activeUnits.length,
+      sources: sourcesFromUnits(
+        activeUnits.map((unit) => ({
+          ...unit,
+          kind: "context" as const,
+          eventTime: new Date("2026-08-13T00:00:00.000Z"),
+        })),
+        this.audits,
+      ),
       runs: this.runs,
       audits: this.audits,
       then: DEMO_PRIOR_DECISION,
@@ -387,6 +548,7 @@ type StoredContext = {
   embedding: ContextUnit["embedding"];
   priorDecision?: PriorDecision;
   signal?: { metric: string; value: number };
+  provenance?: StoredProvenance;
 };
 
 export class MongoContextRepository implements ContextRepository {
@@ -432,6 +594,7 @@ export class MongoContextRepository implements ContextRepository {
       scope: DEMO_SCOPE,
       persistence: this.persistence,
       contextUnitCount,
+      sources: sourcesFromUnits(persistedContext, audits),
       runs,
       audits,
       then: inputs.prior,
@@ -445,6 +608,47 @@ export class MongoContextRepository implements ContextRepository {
 
   async reset(): Promise<DemoSnapshot> {
     await this.ensureContextCollection();
+    const retrievedAt = new Date("2026-08-13T00:00:00.000Z");
+    const syntheticProvenance = (
+      title: string,
+      sourceType: "internal_memo" | "company_update",
+      text: string,
+    ): StoredProvenance => ({
+      title,
+      publisher: "VSee demo",
+      sourceType,
+      visibility: "synthetic",
+      retrievedAt,
+      contentFingerprint: contentFingerprint(text),
+    });
+    const publicReference = (
+      id: string,
+      title: string,
+      canonicalUrl: string,
+    ): StoredContext => {
+      const text = `${title} is a public architecture and implementation reference for VSee. It is not evidence about Irregular company metrics.`;
+      return {
+        id,
+        ...DEMO_SCOPE,
+        active: true,
+        kind: "context",
+        eventTime: retrievedAt,
+        text,
+        embedding: embedText(text),
+        provenance: {
+          title,
+          publisher: title === "MongoDB Agent Skills" ? "MongoDB (GitHub)" : "MongoDB",
+          sourceType: "public_web",
+          visibility: "public",
+          canonicalUrl,
+          retrievedAt,
+          locator: { kind: "web", value: canonicalUrl },
+          contentFingerprint: contentFingerprint(text),
+        },
+      };
+    };
+    const priorText =
+      "Prior action PASS. Revisit after two net retention periods above 90.";
     const seeded: StoredContext[] = [
       {
         id: "prior-decision-pass",
@@ -452,22 +656,77 @@ export class MongoContextRepository implements ContextRepository {
         active: true,
         kind: "prior_decision",
         eventTime: new Date("2026-01-01T00:00:00.000Z"),
-        text: "Prior action PASS. Revisit after two net retention periods above 90.",
+        text: priorText,
         embedding: DEMO_CONTEXT_UNITS[0].embedding,
         priorDecision: DEMO_PRIOR_DECISION,
-      },
-      ...DEMO_SIGNAL.values.map((value, index) => ({
-        id: `net-retention-q${index + 1}`,
-        ...DEMO_SCOPE,
-        active: true,
-        kind: "signal" as const,
-        eventTime: new Date(
-          index === 0 ? "2026-03-31T00:00:00.000Z" : "2026-06-30T00:00:00.000Z",
+        provenance: syntheticProvenance(
+          "Synthetic prior decision memo",
+          "internal_memo",
+          priorText,
         ),
-        text: `Net retention was ${value} in Q${index + 1}.`,
-        embedding: DEMO_CONTEXT_UNITS[1].embedding,
-        signal: { metric: DEMO_SIGNAL.metric, value },
-      })),
+      },
+      ...DEMO_SIGNAL.values.map((value, index) => {
+        const text = `Net retention was ${value} in Q${index + 1}.`;
+        return {
+          id: `net-retention-q${index + 1}`,
+          ...DEMO_SCOPE,
+          active: true,
+          kind: "signal" as const,
+          eventTime: new Date(
+            index === 0
+              ? "2026-03-31T00:00:00.000Z"
+              : "2026-06-30T00:00:00.000Z",
+          ),
+          text,
+          embedding: DEMO_CONTEXT_UNITS[1].embedding,
+          signal: { metric: DEMO_SIGNAL.metric, value },
+          provenance: syntheticProvenance(
+            `Synthetic Q${index + 1} company update`,
+            "company_update",
+            text,
+          ),
+        };
+      }),
+      publicReference(
+        "reference-atlas-vector-search",
+        "MongoDB Atlas Vector Search",
+        "https://www.mongodb.com/products/platform/atlas-vector-search",
+      ),
+      publicReference(
+        "reference-mongodb-mcp-server",
+        "MongoDB MCP Server",
+        "https://www.mongodb.com/products/tools/mcp-server",
+      ),
+      publicReference(
+        "reference-mongodb-agent-skills",
+        "MongoDB Agent Skills",
+        "https://github.com/mongodb/agent-skills",
+      ),
+      ...LEGACY_CORPUS.map(
+        ([id, filename, title, sourceType, fingerprint, mapping]): StoredContext => {
+          const canonicalUrl = `/source-corpus/${filename}`;
+          const text = `${title}. Authorized legacy XTrace corpus item: ${mapping}. This registry entry is not evidence about Irregular metrics.`;
+          return {
+            id: `legacy-${id}`,
+            ...DEMO_SCOPE,
+            active: true,
+            kind: "context",
+            eventTime: retrievedAt,
+            text,
+            embedding: embedText(text),
+            provenance: {
+              title,
+              publisher: "VSee authorized legacy corpus",
+              sourceType,
+              visibility: "public",
+              canonicalUrl,
+              retrievedAt,
+              locator: { kind: "web", value: canonicalUrl },
+              contentFingerprint: fingerprint,
+            },
+          };
+        },
+      ),
     ];
     await Promise.all(
       seeded.map((unit) =>
@@ -498,7 +757,7 @@ export class MongoContextRepository implements ContextRepository {
     const retrieval = await this.getRetrievalStatus();
     if (!retrieval.indexReady) {
       const scoped = await this.units
-        .find({ ...DEMO_SCOPE, active: true })
+        .find(DEMO_RETRIEVAL_FILTER)
         .project<StoredContext>({ _id: 0 })
         .toArray();
       const candidates = retrieveContext(
@@ -522,7 +781,7 @@ export class MongoContextRepository implements ContextRepository {
           query: DEMO_QUERY,
           numCandidates: 20,
           limit: 5,
-          filter: { ...DEMO_SCOPE, active: true },
+          filter: DEMO_RETRIEVAL_FILTER,
         },
       },
       {
@@ -537,6 +796,7 @@ export class MongoContextRepository implements ContextRepository {
           eventTime: 1,
           priorDecision: 1,
           signal: 1,
+          provenance: 1,
           score: { $meta: "vectorSearchScore" },
         },
       },

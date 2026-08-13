@@ -28,6 +28,8 @@ flowchart LR
   D --> E["Durable checkpoint"]
   E --> F["Decision engine\nPASS → REVISIT"]
   E -->|"interrupt / new request / resume"| F
+  D --> G["Fireworks AI\ncited explanation only"]
+  G --> H["MongoDB decision_updates\nmodel · audit ID · packet hash"]
 ```
 
 Core MongoDB features:
@@ -39,11 +41,13 @@ Core MongoDB features:
 - truthful scoped cosine fallback while the asynchronous Atlas index is building;
 - request-scoped MongoDB clients for Cloudflare Worker lifecycle safety.
 
+Fireworks AI is a deliberately downstream partner layer. After a run completes, it receives only the persisted immutable audit and may select exact evidence IDs plus one server-approved diligence action. The server renders the final cited prose exclusively from stored candidate text, then writes it back to MongoDB with the provider, model, audit ID, and packet hash. Unknown IDs, invented prose, and decision-like actions cannot enter the memo. A MongoDB generation lease prevents concurrent fan-out, and a fixed-scope hourly quota caps public provider calls. Fireworks can organize the explanation; it cannot change `PASS` or `REVISIT`.
+
 The interface says `ATLAS VECTOR SEARCH` only when Atlas reports the index queryable. A MongoDB round trip with a building index is labelled `MONGODB SCOPED FALLBACK`; the deterministic fixture is labelled `DEMO FIXTURE`.
 
 ## Run locally
 
-Requirements: Node.js `>=22.13.0` and access to a MongoDB Atlas deployment.
+Requirements: Node.js `>=22.13.0` and access to a MongoDB Atlas deployment. An active Fireworks API key is optional for the cited partner memo; the core context loop does not depend on it.
 
 ```bash
 npm ci
@@ -76,6 +80,7 @@ npm run test:render
 | `POST /api/demo/run` | Run the context loop with an `Idempotency-Key` |
 | `POST /api/demo/interrupt` | Persist retrieval audit/checkpoint, then stop |
 | `POST /api/demo/resume` | Resume using only `{ "runId": "…" }` |
+| `POST /api/demo/explain` | Ask Fireworks for a cited memo from a completed immutable audit, then persist it to MongoDB |
 
 Public mutations cannot select arbitrary databases, collections, workspaces, deals, or queries. API errors are sanitized. Credentials, provider prompts, and unrestricted driver errors never reach the browser.
 
@@ -86,6 +91,7 @@ Public mutations cannot select arbitrary databases, collections, workspaces, dea
 - **Replay, not recomputation.** Resume derives from the stored audit candidates. It does not call retrieval again.
 - **Hard isolation.** Every live query includes `demo_fund`, `deal_irregular`, and `active: true` on the server.
 - **Honest degradation.** Atlas index readiness, MongoDB fallback, and fixture mode are different explicit states.
+- **Partner model is not the judge.** Fireworks writes a cited explanation from the completed packet. Provider failure returns a sanitized unavailable state while the MongoDB-backed decision remains intact.
 
 ## Security and demo operations
 

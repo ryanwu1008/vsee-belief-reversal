@@ -90,7 +90,37 @@ export interface ContextRepository {
     model: string,
   ): Promise<PartnerMemo | null>;
   savePartnerMemo(memo: PartnerMemo): Promise<PartnerMemo>;
+  claimPartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+    now: Date,
+  ): Promise<boolean>;
+  releasePartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<void>;
 }
+
+const PARTNER_MEMO_HOURLY_LIMIT = 30;
+
+type PartnerGenerationClaim = {
+  workspaceId: string;
+  dealId: string;
+  provider: "fireworks";
+  model: string;
+  auditId: string;
+  packetHash: string;
+  createdAt: Date;
+  expiresAt: Date;
+};
+
+type PartnerGenerationQuota = {
+  _id: string;
+  count: number;
+  expiresAt: Date;
+};
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -169,6 +199,8 @@ export class InMemoryContextRepository implements ContextRepository {
   private runs: DemoRun[] = [];
   private audits: DemoAudit[] = [];
   private memos: PartnerMemo[] = [];
+  private generationClaims = new Set<string>();
+  private generationQuota = new Map<string, number>();
 
   constructor(units: readonly ContextUnit[] = DEMO_CONTEXT_UNITS) {
     this.units = clone([...units]);
@@ -292,6 +324,33 @@ export class InMemoryContextRepository implements ContextRepository {
     return clone(scoped);
   }
 
+  async claimPartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+    now: Date,
+  ): Promise<boolean> {
+    const claimKey = `${auditId}:${packetHash}:${model}`;
+    if (this.generationClaims.has(claimKey)) return false;
+    this.generationClaims.add(claimKey);
+    const bucket = now.toISOString().slice(0, 13);
+    const count = (this.generationQuota.get(bucket) ?? 0) + 1;
+    this.generationQuota.set(bucket, count);
+    if (count > PARTNER_MEMO_HOURLY_LIMIT) {
+      this.generationClaims.delete(claimKey);
+      return false;
+    }
+    return true;
+  }
+
+  async releasePartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<void> {
+    this.generationClaims.delete(`${auditId}:${packetHash}:${model}`);
+  }
+
   private async execute(idempotencyKey: string, interrupt: boolean): Promise<DemoRun> {
     const existing = this.runs.find((run) => run.idempotencyKey === idempotencyKey);
     if (existing) return clone(existing);
@@ -337,6 +396,8 @@ export class MongoContextRepository implements ContextRepository {
   private readonly runs: Collection<DemoRun>;
   private readonly audits: Collection<DemoAudit>;
   private readonly updates: Collection<PartnerMemo>;
+  private readonly generationClaims: Collection<PartnerGenerationClaim>;
+  private readonly generationQuotas: Collection<PartnerGenerationQuota>;
 
   constructor(database: Db) {
     this.database = database;
@@ -344,6 +405,12 @@ export class MongoContextRepository implements ContextRepository {
     this.runs = database.collection<DemoRun>("agent_runs");
     this.audits = database.collection<DemoAudit>("retrieval_audits");
     this.updates = database.collection<PartnerMemo>("decision_updates");
+    this.generationClaims = database.collection<PartnerGenerationClaim>(
+      "partner_generation_claims",
+    );
+    this.generationQuotas = database.collection<PartnerGenerationQuota>(
+      "partner_generation_quotas",
+    );
   }
 
   async getSnapshot(): Promise<DemoSnapshot> {
@@ -567,6 +634,90 @@ export class MongoContextRepository implements ContextRepository {
     const stored = await this.updates.findOne(filter);
     if (!stored) throw new Error("Partner memo could not be persisted.");
     return stored;
+  }
+
+  async claimPartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+    now: Date,
+  ): Promise<boolean> {
+    const identity = {
+      ...DEMO_SCOPE,
+      provider: "fireworks" as const,
+      model,
+      auditId,
+      packetHash,
+    };
+    await this.generationClaims.createIndex(
+      {
+        workspaceId: 1,
+        dealId: 1,
+        provider: 1,
+        model: 1,
+        auditId: 1,
+        packetHash: 1,
+      },
+      { unique: true },
+    );
+    await this.generationClaims.createIndex(
+      { expiresAt: 1 },
+      { expireAfterSeconds: 0 },
+    );
+    try {
+      await this.generationClaims.insertOne({
+        ...identity,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 2 * 60 * 1000),
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+
+    const bucket = now.toISOString().slice(0, 13);
+    const quotaId = `fireworks:${DEMO_SCOPE.workspaceId}:${bucket}`;
+    const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    await this.generationQuotas.createIndex(
+      { expiresAt: 1 },
+      { expireAfterSeconds: 0 },
+    );
+    try {
+      await this.generationQuotas.updateOne(
+        { _id: quotaId },
+        {
+          $inc: { count: 1 },
+          $setOnInsert: { _id: quotaId, expiresAt },
+        },
+        { upsert: true },
+      );
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      await this.generationQuotas.updateOne(
+        { _id: quotaId },
+        { $inc: { count: 1 } },
+      );
+    }
+    const quota = await this.generationQuotas.findOne({ _id: quotaId });
+    if (!quota || quota.count > PARTNER_MEMO_HOURLY_LIMIT) {
+      await this.generationClaims.deleteOne(identity);
+      return false;
+    }
+    return true;
+  }
+
+  async releasePartnerMemoGeneration(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<void> {
+    await this.generationClaims.deleteOne({
+      ...DEMO_SCOPE,
+      provider: "fireworks",
+      model,
+      auditId,
+      packetHash,
+    });
   }
 
   private async execute(idempotencyKey: string, interrupt: boolean): Promise<DemoRun> {

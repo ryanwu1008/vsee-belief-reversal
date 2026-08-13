@@ -59,6 +59,9 @@ test("server-renders the VSee product narrative before JavaScript runs", async (
 
   assert.match(html, /<button[^>]*>[^<]*Run context loop[^<]*<\/button>/i);
   assert.match(html, /<button[^>]*>[^<]*Prove crash recovery[^<]*<\/button>/i);
+  assert.match(html, /<button[^>]*>[^<]*Draft cited memo[^<]*<\/button>/i);
+  assert.match(html, /Fireworks AI/i);
+  assert.match(html, /cannot change the deterministic decision/i);
   assert.match(html, /<button[^>]*>[^<]*Reset demo[^<]*<\/button>/i);
   assert.match(html, /<details\b/i);
   assert.match(html, /<summary[^>]*>[^<]*Retrieval audit[^<]*<\/summary>/i);

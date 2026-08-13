@@ -599,6 +599,100 @@ code {
   font-size: 12px;
 }
 
+.partner-layer {
+  padding: 19px 17px 17px;
+  border-bottom: 1px solid var(--rule-dark);
+  background: var(--paper-light);
+}
+
+.partner-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.partner-heading h3 {
+  margin: 2px 0 0;
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 400;
+}
+
+.partner-kicker,
+.partner-memo p span {
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.button-partner {
+  min-height: 45px;
+  padding: 12px 17px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.button-partner:not(:disabled):hover {
+  border-color: var(--green);
+  background: var(--green);
+  color: white;
+}
+
+.partner-guardrail {
+  max-width: 650px;
+  margin: 12px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.partner-memo {
+  margin-top: 17px;
+  padding: 15px 16px;
+  border-left: 3px solid var(--green);
+  background: var(--mint);
+}
+
+.partner-memo p {
+  margin: 0 0 9px;
+  font-family: var(--serif);
+  font-size: 15px;
+}
+
+.partner-memo p:first-child {
+  color: var(--green);
+  font-size: 18px;
+}
+
+.partner-memo p span {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.partner-memo footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(0, 104, 74, 0.25);
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.partner-error {
+  margin: 15px 0 0;
+  padding: 11px 13px;
+  border-left: 3px solid var(--coral);
+  background: var(--coral-soft);
+  color: #7c2e20;
+  font-size: 11px;
+}
+
 .audit-section {
   padding-bottom: 86px;
 }
@@ -946,6 +1040,15 @@ a:focus-visible {
   .status-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .partner-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .button-partner {
+    width: 100%;
   }
 
   .audit-section summary {

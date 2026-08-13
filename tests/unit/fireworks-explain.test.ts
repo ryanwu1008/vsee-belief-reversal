@@ -16,13 +16,9 @@ import {
 import { DEMO_SCOPE } from "../../lib/context-loop/fixtures.ts";
 import type { Db, Document } from "mongodb";
 
-const VALID_MEMO = {
-  headline:
-    "Stored conditions are ready for a diligence review [context-retention-revisit]",
-  whyNow:
-    "The fixed audit packet links retention evidence to the prior condition [context-retention-revisit]",
-  nextStep:
-    "Validate the retained cohort evidence with the team [context-irregular-fund]",
+const VALID_SELECTION = {
+  evidenceIds: ["context-retention-revisit", "context-irregular-fund"],
+  diligenceAction: "review_retention_cohorts",
 };
 
 function completion(content: string, status = 200): Response {
@@ -57,7 +53,7 @@ test("Fireworks receives the immutable persisted audit and returns a cited memo"
     requestUrl = String(input);
     requestHeaders = init?.headers;
     requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    return completion(JSON.stringify(VALID_MEMO));
+    return completion(JSON.stringify(VALID_SELECTION));
   };
 
   const memo = await explainRunWithFireworks({
@@ -88,12 +84,17 @@ test("Fireworks receives the immutable persisted audit and returns a cited memo"
     model: "accounts/fireworks/models/gpt-oss-20b",
     auditId: audit.id,
     packetHash: audit.packetHash,
-    ...VALID_MEMO,
+    headline:
+      "Evidence surfaced: Revisit a pass when net retention is above 90 for two quarters. [context-retention-revisit]",
+    whyNow:
+      "Revisit a pass when net retention is above 90 for two quarters. [context-retention-revisit] The irregular fund requires explicit evidence before a decision changes. [context-irregular-fund]",
+    nextStep:
+      "Review the retention cohorts behind the selected evidence [context-retention-revisit]",
     createdAt: "2026-08-13T20:00:00.000Z",
   });
 });
 
-test("Fireworks output must be valid JSON with known citations and no invented numbers or decisions", async (t) => {
+test("Fireworks may select only stored evidence IDs and a server-approved diligence action", async (t) => {
   const repository = new InMemoryContextRepository();
   await repository.reset();
   const run = await repository.run("explain-validation-001");
@@ -101,16 +102,30 @@ test("Fireworks output must be valid JSON with known citations and no invented n
   const invalidCases = [
     ["malformed JSON", "not-json"],
     [
-      "unknown citation",
-      JSON.stringify({ ...VALID_MEMO, nextStep: "Call the founder [unknown-source]" }),
+      "unknown evidence ID",
+      JSON.stringify({ ...VALID_SELECTION, evidenceIds: ["unknown-source"] }),
     ],
     [
-      "invented number",
-      JSON.stringify({ ...VALID_MEMO, whyNow: "Revenue rose 777 [context-retention-revisit]" }),
+      "unknown action",
+      JSON.stringify({ ...VALID_SELECTION, diligenceAction: "send_term_sheet" }),
     ],
     [
-      "model decision",
-      JSON.stringify({ ...VALID_MEMO, headline: "REVISIT [context-retention-revisit]" }),
+      "inherited object key action",
+      JSON.stringify({ ...VALID_SELECTION, diligenceAction: "toString" }),
+    ],
+    [
+      "duplicate evidence IDs",
+      JSON.stringify({
+        ...VALID_SELECTION,
+        evidenceIds: ["context-retention-revisit", "context-retention-revisit"],
+      }),
+    ],
+    [
+      "invented prose is rejected as an extra field",
+      JSON.stringify({
+        ...VALID_SELECTION,
+        whyNow: "The founder is a Nobel laureate [context-retention-revisit]",
+      }),
     ],
   ] as const;
 
@@ -184,6 +199,8 @@ test("MongoDB memo persistence is idempotent for scope, audit packet, and model"
   let fetchCalls = 0;
   let upserts = 0;
   let uniqueIndex: Document | undefined;
+  let claim: Document | null = null;
+  let quotaCount = 0;
   const cursor = <T>(values: T[]) => ({ toArray: async () => values });
   const database = {
     collection(name: string) {
@@ -222,6 +239,29 @@ test("MongoDB memo persistence is idempotent for scope, audit packet, and model"
           },
         };
       }
+      if (name === "partner_generation_claims") {
+        return {
+          createIndex: async () => "generation-claim-idempotency",
+          insertOne: async (document: Document) => {
+            claim = structuredClone(document);
+            return { acknowledged: true };
+          },
+          deleteOne: async () => {
+            claim = null;
+            return { acknowledged: true };
+          },
+        };
+      }
+      if (name === "partner_generation_quotas") {
+        return {
+          createIndex: async () => "generation-quota-ttl",
+          updateOne: async () => {
+            quotaCount += 1;
+            return { acknowledged: true };
+          },
+          findOne: async () => ({ count: quotaCount }),
+        };
+      }
       return {
         listSearchIndexes: () => cursor([]),
       };
@@ -230,7 +270,7 @@ test("MongoDB memo persistence is idempotent for scope, audit packet, and model"
   const repository = new MongoContextRepository(database);
   const fetchImpl: FireworksFetch = async () => {
     fetchCalls += 1;
-    return completion(JSON.stringify(VALID_MEMO));
+    return completion(JSON.stringify(VALID_SELECTION));
   };
 
   const first = await explainRunWithFireworks({
@@ -252,6 +292,7 @@ test("MongoDB memo persistence is idempotent for scope, audit packet, and model"
 
   assert.equal(fetchCalls, 1);
   assert.equal(upserts, 1);
+  assert.equal(claim, null);
   assert.deepEqual(retry, first);
   assert.deepEqual(uniqueIndex, {
     keys: {
@@ -264,6 +305,77 @@ test("MongoDB memo persistence is idempotent for scope, audit packet, and model"
     },
     options: { unique: true },
   });
+});
+
+test("parallel requests for one audit hold a single provider-generation claim", async () => {
+  const repository = new InMemoryContextRepository();
+  await repository.reset();
+  const run = await repository.run("parallel-explain-001");
+  let fetchCalls = 0;
+  let unblock: (() => void) | undefined;
+  const providerGate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  let providerStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    providerStarted = resolve;
+  });
+  const fetchImpl: FireworksFetch = async () => {
+    fetchCalls += 1;
+    providerStarted?.();
+    await providerGate;
+    return completion(JSON.stringify(VALID_SELECTION));
+  };
+
+  const first = explainRunWithFireworks({
+    repository,
+    runId: run.id,
+    apiKey: "fw-test-secret",
+    fetchImpl,
+  });
+  await started;
+  await assert.rejects(
+    () =>
+      explainRunWithFireworks({
+        repository,
+        runId: run.id,
+        apiKey: "fw-test-secret",
+        fetchImpl,
+      }),
+    /Partner memo generation failed/,
+  );
+  unblock?.();
+  await first;
+
+  assert.equal(fetchCalls, 1);
+});
+
+test("public partner generation is capped per fixed scope and hour", async () => {
+  const repository = new InMemoryContextRepository();
+  await repository.reset();
+  const run = await repository.run("quota-explain-001");
+  let fetchCalls = 0;
+  const fetchImpl: FireworksFetch = async () => {
+    fetchCalls += 1;
+    return new Response("provider unavailable", { status: 503 });
+  };
+  const now = () => new Date("2026-08-13T20:15:00.000Z");
+
+  for (let attempt = 0; attempt < 31; attempt += 1) {
+    await assert.rejects(
+      () =>
+        explainRunWithFireworks({
+          repository,
+          runId: run.id,
+          apiKey: "fw-test-secret",
+          fetchImpl,
+          now,
+        }),
+      /Partner memo generation failed/,
+    );
+  }
+
+  assert.equal(fetchCalls, 30);
 });
 
 test("explain route ignores caller scope and sanitizes provider failures", async () => {

@@ -6,7 +6,11 @@ import { handleResetDemo } from "../../app/api/demo/reset/route.ts";
 import { handleRunDemo } from "../../app/api/demo/run/route.ts";
 import { handleInterruptDemo } from "../../app/api/demo/interrupt/route.ts";
 import { handleResumeDemo } from "../../app/api/demo/resume/route.ts";
-import type { ContextRepository } from "../../lib/mongodb/context-repository.ts";
+import type {
+  ContextRepository,
+  DemoRun,
+  DemoSnapshot,
+} from "../../lib/mongodb/context-repository.ts";
 import { InMemoryContextRepository } from "../../lib/mongodb/context-repository.ts";
 import {
   openMongoContextRepositorySession,
@@ -23,7 +27,7 @@ test("public demo mutations ignore caller-supplied scope and return the fixed sy
   });
 
   const response = await handleResetDemo(request, repository);
-  const payload = await response.json();
+  const payload = (await response.json()) as DemoSnapshot;
 
   assert.equal(response.status, 200);
   assert.deepEqual(payload.scope, {
@@ -48,8 +52,8 @@ test("run route requires an idempotency key and retries return the same run", as
 
   const first = await handleRunDemo(request(), repository);
   const retry = await handleRunDemo(request(), repository);
-  const firstPayload = await first.json();
-  const retryPayload = await retry.json();
+  const firstPayload = (await first.json()) as { run: DemoRun };
+  const retryPayload = (await retry.json()) as { run: DemoRun };
 
   assert.equal(missingKey.status, 400);
   assert.equal(first.status, 200);
@@ -72,7 +76,7 @@ test("resume route rejects arbitrary input and accepts only a run ID", async () 
   });
 
   const response = await handleResumeDemo(request, repository);
-  const payload = await response.json();
+  const payload = (await response.json()) as DemoSnapshot & { run: DemoRun };
 
   assert.equal(response.status, 200);
   assert.equal(payload.run.id, interrupted.id);
@@ -92,7 +96,7 @@ test("interrupt route persists an audit before exposing the interrupted run", as
   });
 
   const response = await handleInterruptDemo(request, repository);
-  const payload = await response.json();
+  const payload = (await response.json()) as { run: DemoRun };
   const snapshot = await repository.getSnapshot();
 
   assert.equal(response.status, 200);
@@ -116,6 +120,8 @@ test("API errors are sanitized before reaching public responses", async () => {
     getCompletedAudit: fail,
     findPartnerMemo: fail,
     savePartnerMemo: fail,
+    claimPartnerMemoGeneration: fail,
+    releasePartnerMemoGeneration: fail,
   };
 
   const response = await handleGetDemo(repository);

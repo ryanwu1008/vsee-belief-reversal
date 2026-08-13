@@ -45,13 +45,30 @@ type DemoSnapshot = {
   audits: DemoAudit[];
 };
 
+type PartnerMemo = {
+  provider: "fireworks";
+  model: string;
+  auditId: string;
+  packetHash: string;
+  headline: string;
+  whyNow: string;
+  nextStep: string;
+  createdAt: string;
+};
+
 type MutationResponse = {
   error?: string;
   persistence?: Persistence;
   run?: DemoRun;
 };
 
-type Action = "run" | "interrupt" | "resume" | "reset";
+type ExplainResponse = {
+  error?: string;
+  persistence?: Persistence;
+  memo?: PartnerMemo;
+};
+
+type Action = "run" | "interrupt" | "resume" | "reset" | "explain";
 
 const API_ERROR = "The demo service could not be reached. The evidence narrative remains available.";
 
@@ -74,6 +91,8 @@ export default function DemoExperience() {
     "Ready. Run the fixed-scope context loop or interrupt it after retrieval.",
   );
   const [error, setError] = useState<string | null>(null);
+  const [partnerMemo, setPartnerMemo] = useState<PartnerMemo | null>(null);
+  const [partnerError, setPartnerError] = useState<string | null>(null);
   const [recoveredAuditId, setRecoveredAuditId] = useState<string | null>(null);
   const idempotencyKeys = useRef<Partial<Record<"run" | "interrupt", string>>>({});
 
@@ -122,6 +141,8 @@ export default function DemoExperience() {
   async function postWithIdempotency(action: "run" | "interrupt") {
     setBusy(action);
     setError(null);
+    setPartnerMemo(null);
+    setPartnerError(null);
     setRecoveredAuditId(null);
     setStatus(action === "run" ? "Retrieving persistent context…" : "Retrieving context before a simulated interruption…");
 
@@ -193,10 +214,41 @@ export default function DemoExperience() {
       setPersistence(payload.persistence === "mongodb" ? "mongodb" : "fixture");
       idempotencyKeys.current = {};
       setRecoveredAuditId(null);
+      setPartnerMemo(null);
+      setPartnerError(null);
       setStatus("Demo reset. The original pass and new evidence are ready.");
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : API_ERROR);
       setStatus("Reset could not complete. The visible narrative is unchanged.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function explain(run: DemoRun) {
+    setBusy("explain");
+    setPartnerError(null);
+    setStatus("Fireworks is drafting from the immutable MongoDB evidence packet…");
+    try {
+      const response = await fetch("/api/demo/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: run.id }),
+      });
+      const payload = await readJson<ExplainResponse>(response);
+      if (!response.ok || !payload.memo) {
+        throw new Error(payload.error || "The partner memo is temporarily unavailable.");
+      }
+      setPartnerMemo(payload.memo);
+      setPersistence(payload.persistence === "mongodb" ? "mongodb" : "fixture");
+      setStatus("Partner memo persisted. The deterministic REVISIT decision is unchanged.");
+    } catch (reason: unknown) {
+      setPartnerError(
+        reason instanceof Error
+          ? reason.message
+          : "The partner memo is temporarily unavailable.",
+      );
+      setStatus("Partner layer unavailable. The MongoDB evidence and deterministic decision remain intact.");
     } finally {
       setBusy(null);
     }
@@ -367,6 +419,41 @@ export default function DemoExperience() {
             >Reset demo</button>
           </div>
           {error ? <p className="error-message" role="alert">{error}</p> : null}
+
+          <div className="partner-layer" aria-labelledby="partner-title">
+            <div className="partner-heading">
+              <div>
+                <span className="partner-kicker">Optional explanation layer</span>
+                <h3 id="partner-title">Fireworks AI</h3>
+              </div>
+              <button
+                className="button button-partner"
+                disabled={busy !== null || latestRun?.status !== "completed"}
+                onClick={() => latestRun && explain(latestRun)}
+                type="button"
+              >Draft cited memo</button>
+            </div>
+            <p className="partner-guardrail">
+              Reads the completed MongoDB audit packet and persists a cited memo. It cannot change the deterministic decision.
+            </p>
+            {partnerMemo ? (
+              <article className="partner-memo" aria-live="polite">
+                <p><strong>{partnerMemo.headline}</strong></p>
+                <p>{partnerMemo.whyNow}</p>
+                <p><span>Next diligence step</span>{partnerMemo.nextStep}</p>
+                <footer>
+                  <span>Persisted to MongoDB</span>
+                  <code>{partnerMemo.model}</code>
+                  <code>{partnerMemo.packetHash.slice(0, 12)}…</code>
+                </footer>
+              </article>
+            ) : null}
+            {partnerError ? (
+              <p className="partner-error" role="alert">
+                {partnerError} The core evidence loop is still fully available.
+              </p>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -447,7 +534,7 @@ export default function DemoExperience() {
 
       <footer className="footer page-shell">
         <p><span>VSee</span> Persistent context for accountable agents.</p>
-        <p>Built on MongoDB Atlas · Synthetic demonstration data</p>
+        <p>Built on MongoDB Atlas + Fireworks AI · Synthetic demonstration data</p>
       </footer>
     </main>
   );

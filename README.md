@@ -1,100 +1,104 @@
-# vinext-starter
+# VSee Context Loop
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+> The agent that knows when your “No” is outdated.
 
-## Prerequisites
+VSee gives venture teams a durable context loop. It remembers why a deal was passed, retrieves only the active memory for that fund and company when new evidence arrives, checkpoints the evidence packet, and changes the next action when the stored revisit condition becomes true.
 
-- Node.js `>=22.13.0`
+## Hackathon provenance
 
-## Quick Start
+This repository is a **new, event-time implementation created during the MongoDB Persistent Context Sprint Hackathon on 13 August 2026**. An older VSee/XTrace prototype helped identify the user problem, but no prior application code or MongoDB integration was copied here. The public commit history starts with the untouched Sites starter and separates the domain, persistence, review remediation, visual asset, interface, and release work.
+
+## The 60-second story
+
+- **Then:** Irregular was passed on 10 Nov 2025 at 78% net retention. The stored condition said: revisit after two quarters above 90%.
+- **Now:** A confirmed update records Q1 at 91% and Q2 at 92%.
+- **Context loop:** MongoDB retrieves the prior decision and both event-time facts using a fixed `workspaceId + dealId + active` boundary, then persists the scored evidence packet and checkpoint before reasoning.
+- **Next:** The action changes from `PASS` to `REVISIT` and proposes a partner meeting.
+- **Crash proof:** Interrupt after retrieval, start a new request, and resume from the same stored audit ID—without retrieving again.
+
+This is not basic RAG. Stored context is causally responsible for the action, and the retrieval/checkpoint is an inspectable product surface rather than hidden prompt stuffing.
+
+## MongoDB is the context plane
+
+```mermaid
+flowchart LR
+  A["Prior decision event\nPASS + revisit rule"] --> C["MongoDB Atlas\ncontext_units"]
+  B["New event-time facts\nQ1 91% · Q2 92%"] --> C
+  C -->|"Atlas Vector Search\nfixed scope filter"| D["Immutable retrieval_audit\nscores · filter · packet hash"]
+  D --> E["Durable checkpoint"]
+  E --> F["Decision engine\nPASS → REVISIT"]
+  E -->|"interrupt / new request / resume"| F
+```
+
+Core MongoDB features:
+
+- organizer-provided Atlas Sandbox as the system of record;
+- Automated Embedding on `context_units.text` using MongoDB-managed `voyage-4`;
+- Atlas Vector Search index `context_vector_v1` with prefilters for `workspaceId`, `dealId`, `active`, `kind`, and `eventTime`;
+- durable `agent_runs` and immutable `retrieval_audits` with idempotency indexes;
+- truthful scoped cosine fallback while the asynchronous Atlas index is building;
+- request-scoped MongoDB clients for Cloudflare Worker lifecycle safety.
+
+The interface says `ATLAS VECTOR SEARCH` only when Atlas reports the index queryable. A MongoDB round trip with a building index is labelled `MONGODB SCOPED FALLBACK`; the deterministic fixture is labelled `DEMO FIXTURE`.
+
+## Run locally
+
+Requirements: Node.js `>=22.13.0` and access to a MongoDB Atlas deployment.
 
 ```bash
-npm install
+npm ci
+cp .env.example .env.local
+# Fill only the server-side values in .env.local.
+npm run atlas:bootstrap
 npm run dev
+```
+
+Open `http://localhost:3000`.
+
+Verification:
+
+```bash
+npm run typecheck
+npm run lint
+npm run test:unit
 npm run build
+npm run test:render
 ```
 
-This starter does not use `wrangler.jsonc`.
+`scripts/bootstrap-atlas.mjs` is idempotent: it creates the demo collection before inspecting search indexes, upserts exactly the fixed synthetic prior decision and Q1/Q2 facts, creates the search index when absent, and clears only the fixed demo scope's run artifacts. It never prints credentials.
 
-## Included Shape
+## Public API contract
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+| Route | Purpose |
+| --- | --- |
+| `GET /api/demo` | Current persisted Then / Now / Next projection and retrieval state |
+| `POST /api/demo/reset` | Restore only the fixed synthetic scope |
+| `POST /api/demo/run` | Run the context loop with an `Idempotency-Key` |
+| `POST /api/demo/interrupt` | Persist retrieval audit/checkpoint, then stop |
+| `POST /api/demo/resume` | Resume using only `{ "runId": "…" }` |
 
-## Workspace Auth Headers
+Public mutations cannot select arbitrary databases, collections, workspaces, deals, or queries. API errors are sanitized. Credentials, provider prompts, and unrestricted driver errors never reach the browser.
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
+## Design choices
 
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
+- **Deterministic decision, semantic retrieval.** The belief change is a typed rule over cited facts, so an LLM outage cannot fabricate the result. MongoDB decides which stored facts enter the packet.
+- **Audit before action.** The retrieval packet—candidate snapshots, scores, fixed filter, mode, packet hash, and checkpoint—is durable before a run is exposed.
+- **Replay, not recomputation.** Resume derives from the stored audit candidates. It does not call retrieval again.
+- **Hard isolation.** Every live query includes `demo_fund`, `deal_irregular`, and `active: true` on the server.
+- **Honest degradation.** Atlas index readiness, MongoDB fallback, and fixture mode are different explicit states.
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+## Security and demo operations
 
-Treat the full name as optional and fall back to email when it is absent:
+- `.env*` is ignored; `.env.example` contains placeholders only.
+- The Atlas application user has read/write access rather than Atlas administration rights.
+- The temporary `0.0.0.0/0` Atlas network entry is for the short-lived serverless hackathon deployment and must be removed after judging.
+- All demo data is synthetic. Do not upload confidential founder, customer, or investment data.
+- Reset is intentionally limited to one public synthetic scope. Production would add per-session isolation, durable rate limiting, and a non-destructive generation pointer.
 
-```tsx
-import { headers } from "next/headers";
+See [docs/demo-runbook.md](docs/demo-runbook.md) for the one-minute video, three-minute stage flow, verification checklist, and failure fallbacks.
 
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
+## Repository and license
 
-  const displayName = fullName ?? email;
-  // ...
-}
-```
+Public source: [github.com/ryanwu1008/vsee-belief-reversal](https://github.com/ryanwu1008/vsee-belief-reversal)
 
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Built solo during the event by Ryan Wu with Codex as an implementation tool. Third-party packages retain their respective licenses.

@@ -12,7 +12,9 @@ test("embedText returns the same 24-dimensional vector for the same text", () =>
   const first = embedText("Q2 net retention reached 92%");
   const second = embedText("Q2 net retention reached 92%");
 
-  assert.equal(first.length, 24);
+  assert.deepEqual(first, [
+    1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+  ]);
   assert.deepEqual(second, first);
 });
 
@@ -97,4 +99,19 @@ test("resumeRun moves an interrupted run to reasoning with its stored audit", ()
 
   assert.equal(resumed.status, "reasoning");
   assert.equal(resumed.retrievalAuditId, audit.id);
+});
+
+test("resumeRun rejects an audit other than the one stored on the run", () => {
+  assert.throws(
+    () =>
+      resumeRun(
+        {
+          id: "run-001",
+          status: "interrupted",
+          retrievalAuditId: "audit-001",
+        },
+        { id: "audit-002", selectedUnitIds: [] },
+      ),
+    /stored retrieval audit/,
+  );
 });

@@ -1,20 +1,24 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "Starter Project",
-  description: "A clean starting point for building your site.",
+  title: "VSee | Persistent Context for AI Agents",
+  description:
+    "Persistent context turns a forgotten pass into the right next move — with every retrieval and checkpoint visible.",
+  openGraph: {
+    title: "VSee | The agent that knows when your No is outdated",
+    description:
+      "A visible, crash-resilient context loop for evidence-backed investment decisions.",
+    type: "website",
+    images: ["/vsee-context-loop-og.png"],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "VSee | Persistent Context for AI Agents",
+    description:
+      "A visible, crash-resilient context loop for evidence-backed investment decisions.",
+    images: ["/vsee-context-loop-og.png"],
+  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
@@ -28,11 +32,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

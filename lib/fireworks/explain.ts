@@ -105,7 +105,7 @@ export async function explainRunWithFireworks({
             },
           },
           temperature: 0,
-          max_tokens: 320,
+          max_tokens: 768,
         }),
         signal: controller.signal,
       });

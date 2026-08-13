@@ -21,7 +21,11 @@ const VALID_SELECTION = {
   diligenceAction: "review_retention_cohorts",
 };
 
-function completion(content: string, status = 200): Response {
+function completion(
+  content: string,
+  status = 200,
+  finishReason: "stop" | "length" = "stop",
+): Response {
   return Response.json(
     {
       id: "completion-1",
@@ -31,7 +35,7 @@ function completion(content: string, status = 200): Response {
       choices: [
         {
           index: 0,
-          finish_reason: "stop",
+          finish_reason: finishReason,
           message: { role: "assistant", content },
         },
       ],
@@ -40,6 +44,30 @@ function completion(content: string, status = 200): Response {
     { status },
   );
 }
+
+test("Fireworks reserves enough completion budget for full-audit structured output", async () => {
+  const repository = new InMemoryContextRepository();
+  await repository.reset();
+  const run = await repository.run("explain-budget-001");
+  const observedBudgets: number[] = [];
+  const fetchImpl: FireworksFetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init.body)) as { max_tokens: number };
+    observedBudgets.push(requestBody.max_tokens);
+    return requestBody.max_tokens >= 768
+      ? completion(JSON.stringify(VALID_SELECTION))
+      : completion('{"evidenceIds":["context-retention-revisit"', 200, "length");
+  };
+
+  const memo = await explainRunWithFireworks({
+    repository,
+    runId: run.id,
+    apiKey: "fw-test-secret",
+    fetchImpl,
+  });
+
+  assert.equal(memo.provider, "fireworks");
+  assert.deepEqual(observedBudgets, [768]);
+});
 
 test("Fireworks receives the immutable persisted audit and returns a cited memo", async () => {
   const repository = new InMemoryContextRepository();

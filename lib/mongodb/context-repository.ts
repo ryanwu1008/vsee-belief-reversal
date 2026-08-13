@@ -220,6 +220,9 @@ const LEGACY_CORPUS = [
   ["reference_vc_brain", "The-VC-Brain.pdf", "The VC Brain", "document", "e225b5c65fd84617373ef86b5737d29fff0ff45994f3013df03f2a4acd9a89a9", "reference document"],
 ] as const satisfies readonly (readonly [string, string, string, "pitch_deck" | "document", string, string])[];
 
+const LEGACY_CORPUS_BASE_URL =
+  "https://raw.githubusercontent.com/ryanwu1008/vsee-belief-reversal/15d87de30bd15fb567ee615f9fc03fd22b480b80/public/source-corpus";
+
 function defaultProvenance(unit: {
   id: string;
   kind?: StoredContext["kind"];
@@ -704,7 +707,7 @@ export class MongoContextRepository implements ContextRepository {
       ),
       ...LEGACY_CORPUS.map(
         ([id, filename, title, sourceType, fingerprint, mapping]): StoredContext => {
-          const canonicalUrl = `/source-corpus/${filename}`;
+          const canonicalUrl = `${LEGACY_CORPUS_BASE_URL}/${filename}`;
           const text = `${title}. Authorized legacy XTrace corpus item: ${mapping}. This registry entry is not evidence about Irregular metrics.`;
           return {
             id: `legacy-${id}`,

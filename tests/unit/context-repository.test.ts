@@ -404,7 +404,7 @@ test("MongoDB reset creates the Atlas auto-embedding index contract", async () =
           (provenance as Document).sourceType as string,
         ) &&
         ((provenance as Document).canonicalUrl as string).startsWith(
-          "/source-corpus/",
+          "https://raw.githubusercontent.com/ryanwu1008/vsee-belief-reversal/15d87de30bd15fb567ee615f9fc03fd22b480b80/public/source-corpus/",
         ),
     ),
   );

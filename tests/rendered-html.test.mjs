@@ -69,6 +69,26 @@ test("server-renders the VSee product narrative before JavaScript runs", async (
   assert.match(html, /deal_irregular/);
   assert.match(html, /net retention threshold revisit decision/i);
   assert.match(html, /Credentials and prompts are never exposed\./i);
+
+  assert.match(
+    html,
+    /<section(?=[^>]*\bid=["']source-registry["'])(?=[^>]*\baria-labelledby=["']source-registry-title["'])[^>]*>/i,
+  );
+  assert.match(html, /<h2[^>]*id=["']source-registry-title["'][^>]*>\s*Collected source registry\s*<\/h2>/i);
+  assert.match(html, /public reference sources do not substantiate the synthetic Irregular metrics/i);
+
+  assert.match(
+    html,
+    /<section(?=[^>]*\bid=["']stack-integration["'])(?=[^>]*\baria-labelledby=["']stack-integration-title["'])[^>]*>/i,
+  );
+  assert.match(html, /<h2[^>]*id=["']stack-integration-title["'][^>]*>\s*How VSee integrates the stack\s*<\/h2>/i);
+  assert.match(html, /MongoDB Atlas/i);
+  assert.match(html, /Automated Embeddings/i);
+  assert.match(html, /voyage-4/i);
+  assert.match(html, /Atlas Vector Search/i);
+  assert.match(html, /durable runs, audits, and checkpoints/i);
+  assert.match(html, /Fireworks/i);
+  assert.match(html, /development and operations integration/i);
 });
 
 test("does not render starter preview metadata or copy", async () => {

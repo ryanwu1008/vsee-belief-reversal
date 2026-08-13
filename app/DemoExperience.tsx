@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { safeSourceHref } from "../lib/source-link";
+
 type Persistence = "mongodb" | "fixture";
 type RunStatus =
   | "queued"
@@ -39,10 +41,29 @@ type DemoAudit = {
   };
 };
 
+type DemoSource = {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceType: string;
+  visibility: string;
+  canonicalUrl?: string;
+  eventTime?: string;
+  publishedAt?: string;
+  retrievedAt: string;
+  locator?: { kind: "web" | "page"; value: string };
+  contentFingerprint: string;
+  text: string;
+  selected: boolean;
+  score?: number;
+  selectionReason?: string;
+};
+
 type DemoSnapshot = {
   persistence: Persistence;
   runs: DemoRun[];
   audits: DemoAudit[];
+  sources?: DemoSource[];
 };
 
 type PartnerMemo = {
@@ -71,6 +92,35 @@ type ExplainResponse = {
 type Action = "run" | "interrupt" | "resume" | "reset" | "explain";
 
 const API_ERROR = "The demo service could not be reached. The evidence narrative remains available.";
+
+const sourceDateFormatter = new Intl.DateTimeFormat("en", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function formatSourceDate(value?: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : sourceDateFormatter.format(date);
+}
+
+function visibilityLabel(visibility: string) {
+  const normalized = visibility.toLowerCase().replaceAll("-", "_");
+  if (normalized === "public" || normalized === "public_web") return "Public web";
+  if (normalized === "private" || normalized === "private_workspace") return "Private";
+  return "Synthetic";
+}
+
+function visibilityClass(visibility: string) {
+  const label = visibilityLabel(visibility);
+  return label === "Public web"
+    ? "is-public"
+    : label === "Private"
+      ? "is-private"
+      : "is-synthetic";
+}
 
 function makeIdempotencyKey(action: "run" | "interrupt") {
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -105,6 +155,11 @@ export default function DemoExperience() {
     [latestRun, snapshot],
   );
   const resumableRun = latestRun?.status === "interrupted" ? latestRun : undefined;
+  const sources = snapshot?.sources ?? [];
+  const selectedSourceCount = sources.filter((source) => source.selected).length;
+  const publicSourceCount = sources.filter(
+    (source) => visibilityLabel(source.visibility) === "Public web",
+  ).length;
 
   async function refreshSnapshot() {
     const response = await fetch("/api/demo", { cache: "no-store" });
@@ -355,6 +410,112 @@ export default function DemoExperience() {
         </article>
       </section>
 
+      <section
+        className="source-registry page-shell"
+        id="source-registry"
+        aria-labelledby="source-registry-title"
+      >
+        <div className="source-registry-heading">
+          <div>
+            <p className="eyebrow">Full provenance, not only the top matches</p>
+            <h2 id="source-registry-title">Collected source registry</h2>
+          </div>
+          <dl className="source-totals" aria-label="Source registry totals">
+            <div><dt>All sources</dt><dd>{sources.length}</dd></div>
+            <div><dt>Public web</dt><dd>{publicSourceCount}</dd></div>
+            <div><dt>Selected</dt><dd>{selectedSourceCount}</dd></div>
+          </dl>
+        </div>
+
+        <p className="source-disclaimer">
+          <strong>Evidence boundary:</strong> public reference sources do not substantiate the synthetic Irregular metrics.
+          The 78%, 91%, and 92% values remain clearly labelled demonstration data.
+        </p>
+
+        {sources.length ? (
+          <ol className="source-list">
+            {sources.map((source) => {
+              const externalUrl = safeSourceHref(source.canonicalUrl);
+              const publishedDate = formatSourceDate(source.publishedAt ?? source.eventTime);
+              const retrievedDate = formatSourceDate(source.retrievedAt);
+
+              return (
+                <li className="source-card" key={source.id}>
+                  <article>
+                    <header className="source-card-header">
+                      <div className="source-badges">
+                        <span className={`source-badge ${visibilityClass(source.visibility)}`}>
+                          {visibilityLabel(source.visibility)}
+                        </span>
+                        <span className="source-type">{source.sourceType.replaceAll("_", " ")}</span>
+                      </div>
+                      <span className={`selection-state ${source.selected ? "is-selected" : ""}`}>
+                        {source.selected ? "Selected for audit" : "Not selected"}
+                      </span>
+                    </header>
+
+                    <div className="source-card-body">
+                      <p className="source-publisher">{source.publisher}</p>
+                      <h3>{source.title}</h3>
+                      <p className="source-excerpt">{source.text}</p>
+                    </div>
+
+                    <dl className="source-metadata">
+                      {publishedDate ? (
+                        <div>
+                          <dt>{source.publishedAt ? "Published" : "Event date"}</dt>
+                          <dd><time dateTime={source.publishedAt ?? source.eventTime}>{publishedDate}</time></dd>
+                        </div>
+                      ) : null}
+                      {retrievedDate ? (
+                        <div>
+                          <dt>Collected</dt>
+                          <dd><time dateTime={source.retrievedAt}>{retrievedDate}</time></dd>
+                        </div>
+                      ) : null}
+                      {source.locator ? (
+                        <div>
+                          <dt>{source.locator.kind === "page" ? "Page" : "Locator"}</dt>
+                          <dd>{source.locator.value}</dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>Fingerprint</dt>
+                        <dd><code>{source.contentFingerprint.slice(0, 14)}…</code></dd>
+                      </div>
+                    </dl>
+
+                    <footer className="source-card-footer">
+                      <div>
+                        {source.selected && Number.isFinite(source.score) ? (
+                          <span>Similarity <strong>{source.score?.toFixed(3)}</strong></span>
+                        ) : (
+                          <span>Available in persistent context</span>
+                        )}
+                        {source.selectionReason ? <small>{source.selectionReason}</small> : null}
+                      </div>
+                      {externalUrl ? (
+                        <a href={externalUrl} target="_blank" rel="noopener noreferrer">
+                          Open original source <span aria-hidden="true">↗</span>
+                        </a>
+                      ) : (
+                        <span className="source-link-unavailable">
+                          {visibilityLabel(source.visibility) === "Private" ? "Private workspace source" : "No public link"}
+                        </span>
+                      )}
+                    </footer>
+                  </article>
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <p className="source-loading" role="status">
+            Loading the complete source registry from persistent context…
+          </p>
+        )}
+      </section>
+
       <section className="demo-console page-shell" aria-labelledby="console-title">
         <div className="console-intro">
           <p className="eyebrow">Inspect the loop</p>
@@ -530,6 +691,54 @@ export default function DemoExperience() {
             selected evidence IDs, scores, hashes, and run state.
           </p>
         </details>
+      </section>
+
+      <section
+        className="stack-integration page-shell"
+        id="stack-integration"
+        aria-labelledby="stack-integration-title"
+      >
+        <div className="stack-heading">
+          <p className="eyebrow">Technology architecture</p>
+          <h2 id="stack-integration-title">How VSee integrates the stack</h2>
+          <p>
+            Each service owns a distinct part of the evidence loop, so persistence,
+            retrieval, recovery, and explanation remain inspectable end to end.
+          </p>
+        </div>
+
+        <ol className="stack-grid">
+          <li>
+            <span>01 · System of record</span>
+            <h3>MongoDB Atlas</h3>
+            <p>Stores company context, source lineage, prior decisions, and the current evidence state in one durable model.</p>
+          </li>
+          <li>
+            <span>02 · Semantic memory</span>
+            <h3>Automated Embeddings</h3>
+            <p>Atlas generates <code>voyage-4</code> embeddings from stored context, keeping semantic recall close to the source record.</p>
+          </li>
+          <li>
+            <span>03 · Scoped retrieval</span>
+            <h3>Atlas Vector Search</h3>
+            <p>Ranks relevant memories only after tenant, deal, visibility, activity, and time filters constrain the search.</p>
+          </li>
+          <li>
+            <span>04 · Durable execution</span>
+            <h3>Runs that recover</h3>
+            <p>MongoDB persists durable runs, audits, and checkpoints so an interrupted agent resumes from the same evidence packet.</p>
+          </li>
+          <li>
+            <span>05 · Cited explanation</span>
+            <h3>Fireworks AI</h3>
+            <p>Reads the immutable audit packet and drafts a cited memo; the deterministic VSee decision remains authoritative.</p>
+          </li>
+          <li>
+            <span>06 · Builder workflow</span>
+            <h3>MCP Server + Agent Skills</h3>
+            <p>They are a development and operations integration for schema, search, and Atlas workflows—not a claimed runtime dependency.</p>
+          </li>
+        </ol>
       </section>
 
       <footer className="footer page-shell">

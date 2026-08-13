@@ -6,7 +6,7 @@
 
 **Architecture:** A vinext/React site calls a narrow server-side domain service. The domain service uses a repository interface backed by MongoDB Atlas in the organizer Sandbox and a deterministic in-memory adapter for unit tests; run checkpoints and retrieval audits are durable first-class documents.
 
-**Tech Stack:** TypeScript, React 19, vinext, Cloudflare Worker/Sites, MongoDB Node driver, Atlas Vector Search, Node test runner, optional Fireworks synthesis.
+**Tech Stack:** TypeScript, React 19, vinext, Cloudflare Worker/Sites, MongoDB Node driver, Atlas Automated Embedding + Vector Search, Node test runner, optional Fireworks synthesis.
 
 **Spec:** `docs/specs/2026-08-13-vsee-context-loop-design.md`
 
@@ -14,7 +14,7 @@
 
 - New event-time repository; do not copy older VSee/XTrace application code.
 - Fixed public scope: `workspaceId="demo_fund"`, `dealId="deal_irregular"`.
-- Atlas index: `context_vector_v1`, cosine, exactly 24 dimensions.
+- Atlas live index: `context_vector_v1`, `autoEmbed` text with `voyage-4`; deterministic fallback vectors are exactly 24 dimensions and must never be labelled live Atlas retrieval.
 - Retrieval filter always includes the fixed workspace, deal and `active:true`.
 - The public page may say `LIVE ATLAS` only after a real database round trip.
 - A resumed interrupted run must reuse its persisted retrieval audit.

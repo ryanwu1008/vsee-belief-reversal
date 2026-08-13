@@ -17,7 +17,7 @@ This repository is a new, event-time implementation. The older VSee/XTrace produ
 
 The public vinext/React site runs on OpenAI Sites. Its server-side API façade owns validation, demo rate limits and secrets. MongoDB Atlas in the organizer-provided `SF .local Build Fest` Sandbox is the agent's context plane and source of truth. A MongoDB Node driver adapter is isolated behind a repository interface so the same domain behavior can be tested deterministically and moved to a narrow Node runtime endpoint if the Worker runtime cannot sustain Atlas TCP connections.
 
-Fireworks is used only for the final explanation when a key is available. The core belief-reversal result is deterministic from cited facts, so provider failure cannot falsify the demo. Embeddings use an explicit, deterministic 24-dimension feature vector for the fixed demo vocabulary; Atlas Vector Search, filtering, persistence and audit—not an opaque model call—remain observable and reproducible.
+Fireworks is used only for the final explanation when a funded key is available. The core belief-reversal result is deterministic from cited facts, so provider failure cannot falsify the demo. Live Atlas retrieval uses Automated Embedding with MongoDB-managed `voyage-4`; no client-side embedding key or vector write is required. An explicit deterministic 24-dimension feature vector remains only for unit tests and clearly labelled offline fallback. Atlas Vector Search, filtering, persistence and audit—not an opaque model call—remain observable and reproducible.
 
 ## MongoDB data model
 
@@ -28,7 +28,7 @@ Fireworks is used only for the final explanation when a key is available. The co
 - `retrieval_audits`: query/filter, candidate IDs/scores, accepted/rejected reason, selected IDs and packet hash.
 - `decision_updates`: prior decision, new conclusion, evidence IDs, cited context IDs, confidence and explanation.
 
-The Vector Search index is `context_vector_v1`, cosine similarity, 24 dimensions. Filter fields are `workspaceId`, `dealId`, `active`, `kind` and `eventTime`. Every query must use `{ workspaceId: "demo_fund", dealId: "deal_irregular", active: true }` before semantic ranking.
+The Vector Search index is `context_vector_v1`. Its `text` field is `autoEmbed` text using `voyage-4`; filter fields are `workspaceId`, `dealId`, `active`, `kind` and `eventTime`. Every query must use `{ workspaceId: "demo_fund", dealId: "deal_irregular", active: true }` before semantic ranking. The 24-dimension deterministic embedding contract applies only to tests/offline fallback and never substitutes for a live Atlas claim.
 
 ## Runtime contract
 

@@ -2,9 +2,9 @@ import "server-only";
 
 import { DEMO_SCOPE } from "../../../lib/context-loop/fixtures.ts";
 import {
-  getContextRepository,
   type ContextRepository,
 } from "../../../lib/mongodb/context-repository.ts";
+import { withContextRepository } from "../../../lib/mongodb/client.ts";
 
 const UNAVAILABLE = "Demo service is temporarily unavailable.";
 
@@ -29,8 +29,14 @@ export async function handleGetDemo(repository: ContextRepository): Promise<Resp
 }
 
 export async function GET(): Promise<Response> {
+  return withPublicRepository(handleGetDemo);
+}
+
+export async function withPublicRepository(
+  handler: (repository: ContextRepository) => Promise<Response>,
+): Promise<Response> {
   try {
-    return handleGetDemo(await getContextRepository());
+    return await withContextRepository(handler);
   } catch {
     return publicFailure();
   }

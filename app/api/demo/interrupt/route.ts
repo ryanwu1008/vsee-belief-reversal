@@ -1,8 +1,7 @@
 import "server-only";
 
 import type { ContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { getContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { json, publicFailure, success } from "../route.ts";
+import { json, publicFailure, success, withPublicRepository } from "../route.ts";
 
 export async function handleInterruptDemo(
   request: Request,
@@ -21,9 +20,5 @@ export async function handleInterruptDemo(
 }
 
 export async function POST(request: Request): Promise<Response> {
-  try {
-    return handleInterruptDemo(request, await getContextRepository());
-  } catch {
-    return publicFailure();
-  }
+  return withPublicRepository((repository) => handleInterruptDemo(request, repository));
 }

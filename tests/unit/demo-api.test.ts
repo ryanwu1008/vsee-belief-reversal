@@ -8,6 +8,11 @@ import { handleInterruptDemo } from "../../app/api/demo/interrupt/route.ts";
 import { handleResumeDemo } from "../../app/api/demo/resume/route.ts";
 import type { ContextRepository } from "../../lib/mongodb/context-repository.ts";
 import { InMemoryContextRepository } from "../../lib/mongodb/context-repository.ts";
+import {
+  openMongoContextRepositorySession,
+  withContextRepository,
+  type ContextRepositorySession,
+} from "../../lib/mongodb/client.ts";
 
 test("public demo mutations ignore caller-supplied scope and return the fixed synthetic scope", async () => {
   const repository = new InMemoryContextRepository();
@@ -118,4 +123,54 @@ test("API errors are sanitized before reaching public responses", async () => {
   assert.deepEqual(JSON.parse(body), {
     error: "Demo service is temporarily unavailable.",
   });
+});
+
+test("database-backed requests use distinct sessions and always close them", async () => {
+  const opened: number[] = [];
+  const closed: number[] = [];
+  const repository = new InMemoryContextRepository();
+  const openSession = async (): Promise<ContextRepositorySession> => {
+    const id = opened.length + 1;
+    opened.push(id);
+    return {
+      repository,
+      close: async () => {
+        closed.push(id);
+      },
+    };
+  };
+
+  await withContextRepository(async () => "first", openSession);
+  await withContextRepository(async () => "second", openSession);
+  await assert.rejects(
+    () =>
+      withContextRepository(async () => {
+        throw new Error("handler failed");
+      }, openSession),
+    /handler failed/,
+  );
+
+  assert.deepEqual(opened, [1, 2, 3]);
+  assert.deepEqual(closed, [1, 2, 3]);
+});
+
+test("a request-scoped Mongo client closes when connection setup fails", async () => {
+  let closes = 0;
+  const client = {
+    connect: async () => {
+      throw new Error("connect failed");
+    },
+    close: async () => {
+      closes += 1;
+    },
+    db: () => {
+      throw new Error("db must not be reached");
+    },
+  };
+
+  await assert.rejects(
+    () => openMongoContextRepositorySession(() => client),
+    /connect failed/,
+  );
+  assert.equal(closes, 1);
 });

@@ -1,8 +1,7 @@
 import "server-only";
 
 import type { ContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { getContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { json, publicFailure, success } from "../route.ts";
+import { json, publicFailure, success, withPublicRepository } from "../route.ts";
 
 async function readRunId(request: Request): Promise<string | undefined> {
   try {
@@ -32,9 +31,5 @@ export async function handleResumeDemo(
 }
 
 export async function POST(request: Request): Promise<Response> {
-  try {
-    return handleResumeDemo(request, await getContextRepository());
-  } catch {
-    return publicFailure();
-  }
+  return withPublicRepository((repository) => handleResumeDemo(request, repository));
 }

@@ -11,14 +11,40 @@ import {
 } from "../context-loop/fixtures.ts";
 import { deriveDecision, retrieveContext, resumeRun } from "../context-loop/engine.ts";
 import type { ContextUnit, Decision, RetrievalAudit, Run } from "../context-loop/types.ts";
+import type { PriorDecision } from "../context-loop/types.ts";
 
 export type PersistenceMode = "mongodb" | "fixture";
+
+export type RetrievalMode =
+  | "atlas-vector"
+  | "mongodb-cosine-fallback"
+  | "fixture";
+
+export type RetrievalStatus = {
+  mode: RetrievalMode;
+  indexName: "context_vector_v1";
+  indexReady: boolean;
+};
+
+export type DemoAuditCandidate = RepositoryRetrievedContext & {
+  accepted: boolean;
+  reason: string;
+};
 
 export type DemoAudit = RetrievalAudit & {
   workspaceId: string;
   dealId: string;
   query: string;
   createdAt: string;
+  filter: typeof DEMO_SCOPE & { active: true };
+  retrieval: RetrievalStatus;
+  candidates: DemoAuditCandidate[];
+  packetHash: string;
+  checkpoint: {
+    id: string;
+    state: "retrieved";
+    createdAt: string;
+  };
 };
 
 export type DemoRun = Run & {
@@ -30,6 +56,10 @@ export type DemoRun = Run & {
 
 export type RepositoryRetrievedContext = Omit<ContextUnit, "embedding"> & {
   score: number;
+  kind?: "prior_decision" | "signal" | "context";
+  eventTime?: Date;
+  priorDecision?: PriorDecision;
+  signal?: { metric: string; value: number };
 };
 
 export type DemoSnapshot = {
@@ -38,9 +68,10 @@ export type DemoSnapshot = {
   contextUnitCount: number;
   runs: DemoRun[];
   audits: DemoAudit[];
-  then: typeof DEMO_PRIOR_DECISION;
-  now: typeof DEMO_SIGNAL;
+  then: PriorDecision | null;
+  now: { metric: string; values: number[] } | null;
   next: Decision;
+  retrieval: RetrievalStatus;
 };
 
 export interface ContextRepository {
@@ -59,6 +90,69 @@ function clone<T>(value: T): T {
 
 function completedDecision(): Decision {
   return deriveDecision(DEMO_PRIOR_DECISION, DEMO_SIGNAL);
+}
+
+function buildAudit(
+  id: string,
+  selected: RepositoryRetrievedContext[],
+  retrieval: DemoAudit["retrieval"],
+): DemoAudit {
+  const createdAt = new Date().toISOString();
+  const candidates = selected.map((candidate) => ({
+    ...candidate,
+    accepted: true,
+    reason: "Selected by the fixed-scope retrieval packet.",
+  }));
+  const packetHash = createHash("sha256")
+    .update(JSON.stringify({ filter: { ...DEMO_SCOPE, active: true }, candidates }))
+    .digest("hex");
+  return {
+    id,
+    ...DEMO_SCOPE,
+    query: DEMO_QUERY,
+    selectedUnitIds: selected.map((unit) => unit.id),
+    createdAt,
+    filter: { ...DEMO_SCOPE, active: true },
+    retrieval,
+    candidates,
+    packetHash,
+    checkpoint: {
+      id: `checkpoint:${packetHash}`,
+      state: "retrieved",
+      createdAt,
+    },
+  };
+}
+
+function deriveDecisionFromSelected(
+  selected: RepositoryRetrievedContext[],
+): Decision {
+  const { prior, signal } = decisionInputsFromSelected(selected);
+  if (!prior || !signal) return { action: prior?.action ?? "PASS" };
+  return deriveDecision(prior, signal);
+}
+
+function decisionInputsFromSelected(selected: RepositoryRetrievedContext[]): {
+  prior: PriorDecision | null;
+  signal: { metric: string; values: number[] } | null;
+} {
+  const prior = selected.find(
+    (unit) => unit.kind === "prior_decision" && unit.priorDecision,
+  )?.priorDecision ?? null;
+  if (!prior) return { prior: null, signal: null };
+
+  const metric = prior.revisitCondition?.metric;
+  const values = selected
+    .filter((unit) => unit.kind === "signal" && unit.signal?.metric === metric)
+    .sort(
+      (left, right) =>
+        (left.eventTime?.getTime() ?? 0) - (right.eventTime?.getTime() ?? 0),
+    )
+    .flatMap((unit) => (unit.signal ? [unit.signal.value] : []));
+  return {
+    prior,
+    signal: metric ? { metric, values } : null,
+  };
 }
 
 export class InMemoryContextRepository implements ContextRepository {
@@ -86,6 +180,11 @@ export class InMemoryContextRepository implements ContextRepository {
       then: DEMO_PRIOR_DECISION,
       now: DEMO_SIGNAL,
       next: completedDecision(),
+      retrieval: {
+        mode: "fixture",
+        indexName: "context_vector_v1",
+        indexReady: false,
+      },
     });
   }
 
@@ -148,13 +247,11 @@ export class InMemoryContextRepository implements ContextRepository {
 
     const selected = await this.retrieve();
     const runId = randomUUID();
-    const audit: DemoAudit = {
-      id: randomUUID(),
-      ...DEMO_SCOPE,
-      query: DEMO_QUERY,
-      selectedUnitIds: selected.map((unit) => unit.id),
-      createdAt: new Date().toISOString(),
-    };
+    const audit = buildAudit(randomUUID(), selected, {
+      mode: "fixture",
+      indexName: "context_vector_v1",
+      indexReady: false,
+    });
     const run: DemoRun = {
       id: runId,
       ...DEMO_SCOPE,
@@ -174,9 +271,12 @@ type StoredContext = {
   workspaceId: string;
   dealId: string;
   active: boolean;
-  kind: string;
+  kind: "prior_decision" | "signal" | "context";
   eventTime: Date;
   text: string;
+  embedding: ContextUnit["embedding"];
+  priorDecision?: PriorDecision;
+  signal?: { metric: string; value: number };
 };
 
 export class MongoContextRepository implements ContextRepository {
@@ -195,34 +295,60 @@ export class MongoContextRepository implements ContextRepository {
 
   async getSnapshot(): Promise<DemoSnapshot> {
     const filter = { ...DEMO_SCOPE };
-    const [contextUnitCount, runs, audits] = await Promise.all([
+    const [contextUnitCount, runs, audits, retrieval, persistedContext] = await Promise.all([
       this.units.countDocuments({ ...filter, active: true }),
       this.runs.find(filter).sort({ _id: 1 }).toArray(),
       this.audits.find(filter).sort({ createdAt: 1 }).toArray(),
+      this.getRetrievalStatus(),
+      this.units
+        .find({ ...filter, active: true })
+        .project<StoredContext>({ _id: 0 })
+        .toArray(),
     ]);
+    const inputs = decisionInputsFromSelected(
+      persistedContext.map((unit) => ({ ...unit, score: 0 })),
+    );
     return {
       scope: DEMO_SCOPE,
       persistence: this.persistence,
       contextUnitCount,
       runs,
       audits,
-      then: DEMO_PRIOR_DECISION,
-      now: DEMO_SIGNAL,
-      next: completedDecision(),
+      then: inputs.prior,
+      now: inputs.signal,
+      next: deriveDecisionFromSelected(
+        persistedContext.map((unit) => ({ ...unit, score: 0 })),
+      ),
+      retrieval,
     };
   }
 
   async reset(): Promise<DemoSnapshot> {
-    await this.ensureVectorSearchIndex();
-    const seeded = DEMO_CONTEXT_UNITS.map((unit) => ({
-      id: unit.id,
-      workspaceId: unit.workspaceId,
-      dealId: unit.dealId,
-      active: unit.active,
-      text: unit.text,
-      kind: "decision_rule",
-      eventTime: new Date("2026-08-13T00:00:00.000Z"),
-    }));
+    await this.ensureContextCollection();
+    const seeded: StoredContext[] = [
+      {
+        id: "prior-decision-pass",
+        ...DEMO_SCOPE,
+        active: true,
+        kind: "prior_decision",
+        eventTime: new Date("2026-01-01T00:00:00.000Z"),
+        text: "Prior action PASS. Revisit after two net retention periods above 90.",
+        embedding: DEMO_CONTEXT_UNITS[0].embedding,
+        priorDecision: DEMO_PRIOR_DECISION,
+      },
+      ...DEMO_SIGNAL.values.map((value, index) => ({
+        id: `net-retention-q${index + 1}`,
+        ...DEMO_SCOPE,
+        active: true,
+        kind: "signal" as const,
+        eventTime: new Date(
+          index === 0 ? "2026-03-31T00:00:00.000Z" : "2026-06-30T00:00:00.000Z",
+        ),
+        text: `Net retention was ${value} in Q${index + 1}.`,
+        embedding: DEMO_CONTEXT_UNITS[1].embedding,
+        signal: { metric: DEMO_SIGNAL.metric, value },
+      })),
+    ];
     await Promise.all(
       seeded.map((unit) =>
         this.units.replaceOne(
@@ -237,10 +363,35 @@ export class MongoContextRepository implements ContextRepository {
       this.runs.deleteMany({ ...DEMO_SCOPE }),
       this.audits.deleteMany({ ...DEMO_SCOPE }),
     ]);
+    await this.ensureVectorSearchIndex();
     return this.getSnapshot();
   }
 
   async retrieve(): Promise<RepositoryRetrievedContext[]> {
+    return (await this.retrievePacket()).candidates;
+  }
+
+  private async retrievePacket(): Promise<{
+    candidates: RepositoryRetrievedContext[];
+    retrieval: RetrievalStatus;
+  }> {
+    const retrieval = await this.getRetrievalStatus();
+    if (!retrieval.indexReady) {
+      const scoped = await this.units
+        .find({ ...DEMO_SCOPE, active: true })
+        .project<StoredContext>({ _id: 0 })
+        .toArray();
+      const candidates = retrieveContext(
+        scoped.map((unit) => ({ ...unit, embedding: unit.embedding })),
+        { ...DEMO_SCOPE, text: DEMO_QUERY },
+      ).map((unit) => {
+        const { embedding, ...candidate } = unit;
+        void embedding;
+        return candidate;
+      });
+      return { candidates, retrieval };
+    }
+
     // Atlas Automated Embedding Public Preview extends $vectorSearch with a
     // string `query`; Document[] keeps the preview-only field isolated here.
     const pipeline: Document[] = [
@@ -262,11 +413,20 @@ export class MongoContextRepository implements ContextRepository {
           dealId: 1,
           active: 1,
           text: 1,
+          kind: 1,
+          eventTime: 1,
+          priorDecision: 1,
+          signal: 1,
           score: { $meta: "vectorSearchScore" },
         },
       },
     ];
-    return this.units.aggregate<RepositoryRetrievedContext>(pipeline).toArray();
+    return {
+      candidates: await this.units
+        .aggregate<RepositoryRetrievedContext>(pipeline)
+        .toArray(),
+      retrieval,
+    };
   }
 
   async run(idempotencyKey: string): Promise<DemoRun> {
@@ -292,7 +452,7 @@ export class MongoContextRepository implements ContextRepository {
     const completed: DemoRun = {
       ...run,
       status: "completed",
-      decision: completedDecision(),
+      decision: deriveDecisionFromSelected(audit.candidates),
     };
     await this.runs.replaceOne({ id: run.id, ...DEMO_SCOPE }, completed);
     return completed;
@@ -308,14 +468,8 @@ export class MongoContextRepository implements ContextRepository {
       .digest("hex")}`;
     let audit = await this.audits.findOne({ id: auditId, ...DEMO_SCOPE });
     if (!audit) {
-      const selected = await this.retrieve();
-      const candidate: DemoAudit = {
-        id: auditId,
-        ...DEMO_SCOPE,
-        query: DEMO_QUERY,
-        selectedUnitIds: selected.map((unit) => unit.id),
-        createdAt: new Date().toISOString(),
-      };
+      const packet = await this.retrievePacket();
+      const candidate = buildAudit(auditId, packet.candidates, packet.retrieval);
       await this.audits.updateOne(
         { id: auditId, ...DEMO_SCOPE },
         { $setOnInsert: candidate },
@@ -330,7 +484,7 @@ export class MongoContextRepository implements ContextRepository {
       idempotencyKey,
       retrievalAuditId: auditId,
       status: interrupt ? "interrupted" : "completed",
-      ...(interrupt ? {} : { decision: completedDecision() }),
+      ...(interrupt ? {} : { decision: deriveDecisionFromSelected(audit.candidates) }),
     };
 
     try {
@@ -375,6 +529,36 @@ export class MongoContextRepository implements ContextRepository {
     });
   }
 
+  private async getRetrievalStatus(): Promise<RetrievalStatus> {
+    try {
+      const indexes = (await this.units
+        .listSearchIndexes("context_vector_v1")
+        .toArray()) as Document[];
+      const [index] = indexes;
+      const indexReady = index?.queryable === true;
+      return {
+        mode: indexReady ? "atlas-vector" : "mongodb-cosine-fallback",
+        indexName: "context_vector_v1",
+        indexReady,
+      };
+    } catch (error) {
+      if (!isMongoErrorCode(error, 26)) throw error;
+      return {
+        mode: "mongodb-cosine-fallback",
+        indexName: "context_vector_v1",
+        indexReady: false,
+      };
+    }
+  }
+
+  private async ensureContextCollection(): Promise<void> {
+    try {
+      await this.database.createCollection("context_units");
+    } catch (error) {
+      if (!isMongoErrorCode(error, 48)) throw error;
+    }
+  }
+
   private async ensurePersistenceIndexes(): Promise<void> {
     await Promise.all([
       this.runs.createIndex(
@@ -390,23 +574,14 @@ export class MongoContextRepository implements ContextRepository {
 }
 
 function isDuplicateKeyError(error: unknown): boolean {
+  return isMongoErrorCode(error, 11000);
+}
+
+function isMongoErrorCode(error: unknown, code: number): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    (error as { code?: unknown }).code === 11000
+    (error as { code?: unknown }).code === code
   );
-}
-
-let fixtureRepository: InMemoryContextRepository | undefined;
-
-export async function getContextRepository(): Promise<ContextRepository> {
-  if (process.env.CONTEXT_LOOP_USE_FIXTURE === "true") {
-    fixtureRepository ??= new InMemoryContextRepository();
-    return fixtureRepository;
-  }
-
-  const { getMongoClient, getMongoDatabaseName } = await import("./client.ts");
-  const client = await getMongoClient();
-  return new MongoContextRepository(client.db(getMongoDatabaseName()));
 }

@@ -1,8 +1,7 @@
 import "server-only";
 
 import type { ContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { getContextRepository } from "../../../../lib/mongodb/context-repository.ts";
-import { publicFailure, success } from "../route.ts";
+import { publicFailure, success, withPublicRepository } from "../route.ts";
 
 export async function handleResetDemo(
   _request: Request,
@@ -17,9 +16,5 @@ export async function handleResetDemo(
 }
 
 export async function POST(request: Request): Promise<Response> {
-  try {
-    return handleResetDemo(request, await getContextRepository());
-  } catch {
-    return publicFailure();
-  }
+  return withPublicRepository((repository) => handleResetDemo(request, repository));
 }

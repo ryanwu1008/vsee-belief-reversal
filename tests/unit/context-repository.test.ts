@@ -111,9 +111,11 @@ test("MongoDB retry reuses a durable audit after run persistence is interrupted"
     toArray: async () => values,
   });
   const database = {
+    async createCollection() {},
     collection(name: string) {
       if (name === "context_units") {
         return {
+          listSearchIndexes: () => cursor([{ queryable: true, status: "READY" }]),
           aggregate(pipeline: Document[]) {
             retrievals += 1;
             assert.deepEqual(pipeline[0], {
@@ -163,11 +165,14 @@ test("MongoDB retry reuses a durable audit after run persistence is interrupted"
 
 test("MongoDB reset creates the Atlas auto-embedding index contract", async () => {
   let command: Document | undefined;
+  const seeded: Document[] = [];
   const cursor = <T>(values: T[]) => ({
+    project: () => cursor(values),
     sort: () => cursor(values),
     toArray: async () => values,
   });
   const database = {
+    async createCollection() {},
     collection(name: string) {
       const shared = {
         createIndex: async () => "index",
@@ -179,8 +184,11 @@ test("MongoDB reset creates the Atlas auto-embedding index contract", async () =
           ...shared,
           collectionName: "context_units",
           listSearchIndexes: () => cursor([]),
-          replaceOne: async () => ({ acknowledged: true }),
-          countDocuments: async () => 2,
+          replaceOne: async (_filter: unknown, replacement: Document) => {
+            seeded.push(structuredClone(replacement));
+            return { acknowledged: true };
+          },
+          countDocuments: async () => 3,
         };
       }
       return shared;
@@ -192,6 +200,41 @@ test("MongoDB reset creates the Atlas auto-embedding index contract", async () =
 
   await new MongoContextRepository(database).reset();
 
+  assert.deepEqual(
+    seeded.map(({ id, kind, priorDecision, signal }) => ({
+      id,
+      kind,
+      priorDecision,
+      signal,
+    })),
+    [
+      {
+        id: "prior-decision-pass",
+        kind: "prior_decision",
+        priorDecision: {
+          action: "PASS",
+          revisitCondition: {
+            metric: "net_retention",
+            minimum: 90,
+            consecutivePeriods: 2,
+          },
+        },
+        signal: undefined,
+      },
+      {
+        id: "net-retention-q1",
+        kind: "signal",
+        priorDecision: undefined,
+        signal: { metric: "net_retention", value: 91 },
+      },
+      {
+        id: "net-retention-q2",
+        kind: "signal",
+        priorDecision: undefined,
+        signal: { metric: "net_retention", value: 92 },
+      },
+    ],
+  );
   assert.deepEqual(command, {
     createSearchIndexes: "context_units",
     indexes: [
@@ -216,4 +259,204 @@ test("MongoDB reset creates the Atlas auto-embedding index contract", async () =
       },
     ],
   });
+});
+
+test("MongoDB reset creates a fresh context namespace before inspecting search indexes", async () => {
+  let namespaceExists = false;
+  const cursor = <T>(values: T[]) => ({
+    project: () => cursor(values),
+    sort: () => cursor(values),
+    toArray: async () => values,
+  });
+  const database = {
+    async createCollection(name: string) {
+      assert.equal(name, "context_units");
+      namespaceExists = true;
+    },
+    collection(name: string) {
+      const shared = {
+        createIndex: async () => "index",
+        deleteMany: async () => ({ acknowledged: true, deletedCount: 0 }),
+        find: () => cursor([]),
+      };
+      if (name === "context_units") {
+        return {
+          ...shared,
+          collectionName: "context_units",
+          listSearchIndexes: () => {
+            if (!namespaceExists) {
+              const error = new Error("ns not found") as Error & { code: number };
+              error.code = 26;
+              throw error;
+            }
+            return cursor([]);
+          },
+          replaceOne: async () => ({ acknowledged: true }),
+          countDocuments: async () => 3,
+        };
+      }
+      return shared;
+    },
+    async command() {},
+  } as unknown as Db;
+
+  const snapshot = await new MongoContextRepository(database).reset();
+
+  assert.equal(snapshot.contextUnitCount, 3);
+  assert.equal(namespaceExists, true);
+});
+
+test("MongoDB run derives its decision from persisted selected prior and signal facts", async () => {
+  let minimum = 95;
+  const audits = new Map<string, DemoAudit>();
+  const runs = new Map<string, DemoRun>();
+  const cursor = <T>(values: T[]) => ({ toArray: async () => values });
+  const database = {
+    collection(name: string) {
+      if (name === "context_units") {
+        return {
+          listSearchIndexes: () => cursor([{ queryable: true, status: "READY" }]),
+          aggregate: () =>
+            cursor([
+              {
+                id: "prior",
+                ...DEMO_SCOPE,
+                active: true,
+                kind: "prior_decision",
+                text: "Prior action PASS with a revisit condition.",
+                eventTime: new Date("2026-01-01T00:00:00.000Z"),
+                priorDecision: {
+                  action: "PASS",
+                  revisitCondition: {
+                    metric: "net_retention",
+                    minimum,
+                    consecutivePeriods: 2,
+                  },
+                },
+                score: 0.99,
+              },
+              ...[91, 92].map((value, index) => ({
+                id: `signal-q${index + 1}`,
+                ...DEMO_SCOPE,
+                active: true,
+                kind: "signal",
+                text: `Net retention ${value}`,
+                eventTime: new Date(`2026-0${index + 1}-01T00:00:00.000Z`),
+                signal: { metric: "net_retention", value },
+                score: 0.9 - index / 100,
+              })),
+            ]),
+        };
+      }
+      if (name === "retrieval_audits") {
+        return {
+          createIndex: async () => "audit-idempotency",
+          findOne: async ({ id }: { id: string }) => audits.get(id) ?? null,
+          updateOne: async (
+            { id }: { id: string },
+            update: { $setOnInsert: DemoAudit },
+          ) => audits.set(id, structuredClone(update.$setOnInsert)),
+        };
+      }
+      return {
+        createIndex: async () => "run-idempotency",
+        findOne: async ({ idempotencyKey }: { idempotencyKey: string }) =>
+          runs.get(idempotencyKey) ?? null,
+        insertOne: async (run: DemoRun) => runs.set(run.idempotencyKey, run),
+      };
+    },
+  } as unknown as Db;
+  const repository = new MongoContextRepository(database);
+
+  const pass = await repository.run("persisted-minimum-95");
+  minimum = 90;
+  const revisit = await repository.run("persisted-minimum-90");
+
+  assert.deepEqual(pass.decision, { action: "PASS" });
+  assert.deepEqual(revisit.decision, { action: "REVISIT" });
+});
+
+test("MongoDB records a truthful scoped fallback audit while the vector index is building", async () => {
+  let aggregateCalls = 0;
+  const storedAudits: DemoAudit[] = [];
+  const cursor = <T>(values: T[]) => ({
+    project: () => cursor(values),
+    toArray: async () => values,
+  });
+  const scopedFacts = [
+    {
+      id: "prior",
+      ...DEMO_SCOPE,
+      active: true,
+      kind: "prior_decision",
+      text: "PASS revisit net retention",
+      eventTime: new Date("2026-01-01T00:00:00.000Z"),
+      embedding: embedText("PASS revisit net retention"),
+      priorDecision: {
+        action: "PASS" as const,
+        revisitCondition: {
+          metric: "net_retention",
+          minimum: 90,
+          consecutivePeriods: 2,
+        },
+      },
+    },
+    ...[91, 92].map((value, index) => ({
+      id: `signal-${index}`,
+      ...DEMO_SCOPE,
+      active: true,
+      kind: "signal" as const,
+      text: `net retention ${value}`,
+      eventTime: new Date(`2026-0${index + 1}-01T00:00:00.000Z`),
+      embedding: embedText(`net retention ${value}`),
+      signal: { metric: "net_retention", value },
+    })),
+  ];
+  const database = {
+    collection(name: string) {
+      if (name === "context_units") {
+        return {
+          listSearchIndexes: () => cursor([{ status: "BUILDING", queryable: false }]),
+          aggregate: () => {
+            aggregateCalls += 1;
+            return cursor([]);
+          },
+          find: (filter: Document) => {
+            assert.deepEqual(filter, { ...DEMO_SCOPE, active: true });
+            return cursor(scopedFacts);
+          },
+        };
+      }
+      if (name === "retrieval_audits") {
+        return {
+          createIndex: async () => "audit-idempotency",
+          findOne: async () => storedAudits[0] ?? null,
+          updateOne: async (_filter: unknown, update: { $setOnInsert: DemoAudit }) => {
+            storedAudits[0] = structuredClone(update.$setOnInsert);
+          },
+        };
+      }
+      return {
+        createIndex: async () => "run-idempotency",
+        findOne: async () => null,
+        insertOne: async () => ({ acknowledged: true }),
+      };
+    },
+  } as unknown as Db;
+
+  await new MongoContextRepository(database).run("fallback-audit");
+
+  assert.equal(aggregateCalls, 0);
+  const [storedAudit] = storedAudits;
+  assert.deepEqual(storedAudit.filter, { ...DEMO_SCOPE, active: true });
+  assert.deepEqual(storedAudit.retrieval, {
+    mode: "mongodb-cosine-fallback",
+    indexName: "context_vector_v1",
+    indexReady: false,
+  });
+  assert.equal(storedAudit.candidates.length, 3);
+  assert.ok(storedAudit.candidates.every((candidate) => Number.isFinite(candidate.score)));
+  assert.match(storedAudit.packetHash, /^[a-f0-9]{64}$/);
+  assert.equal(storedAudit.checkpoint.id, `checkpoint:${storedAudit.packetHash}`);
+  assert.equal(storedAudit.checkpoint.state, "retrieved");
 });

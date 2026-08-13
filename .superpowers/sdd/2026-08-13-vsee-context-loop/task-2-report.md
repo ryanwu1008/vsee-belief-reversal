@@ -87,4 +87,50 @@ built all five public API routes; whitespace validation passed.
 
 ## Commit
 
-Pending at report creation; the final response records the resulting SHA.
+Initial slice: `9cab2a0984294ef87f682e6d4067d471a9cc53e5`.
+
+## Review remediation
+
+The Task 2 blocking review was handled with focused RED→GREEN cycles:
+
+- Fresh namespace RED reproduced `NamespaceNotFound` when search indexes were
+  inspected before `context_units` existed. Reset now creates the collection,
+  upserts the fixed prior-decision and Q1/Q2 fact documents, then inspects or
+  creates the search index. Namespace-exists code 48 is accepted on repeat reset.
+- Persisted-evidence RED showed both a 95 and 90 stored threshold produced
+  REVISIT. Mongo runs and resumes now derive from the immutable candidates in
+  the persisted audit; 95 produces PASS and 90 produces REVISIT. Mongo snapshot
+  Then/Now/Next values are reconstructed from scoped stored documents rather
+  than the fixture constants.
+- Worker lifecycle RED showed no request-session helper existed. Every API route
+  now uses one shared request-scoped helper, creates a new MongoClient per
+  request, and closes it after success, handler failure, or connection failure.
+- A BUILDING-index RED proved `$vectorSearch` was still called. Retrieval now
+  checks `queryable`, uses a fixed-scope active-document cosine fallback while
+  the index is unavailable, and truthfully reports `atlas-vector`,
+  `mongodb-cosine-fallback`, or `fixture` plus index readiness.
+- Audit packets now persist the fixed filter, selected candidate snapshots and
+  scores, acceptance reasons, retrieval mode/index readiness, SHA-256 packet
+  hash, and an explicit retrieved checkpoint ID/state/time. Resume consumes
+  those stored candidates without retrieval.
+
+Fresh fixup verification:
+
+```sh
+npm run test:unit && npm run lint && npm run build && git diff --check
+```
+
+Result: 21 unit tests passed with 0 failures; lint, build and diff-check exited
+zero. The full TypeScript command still reports only the pre-existing
+Cloudflare ambient declarations listed above; Task 2 introduces no TS error.
+
+Deferred concerns from review:
+
+- Public reset/session abuse control remains intentionally deferred because the
+  requested fix scope explicitly excluded a larger rate-limit/session design.
+- Concurrent same-key requests still rely on unique persisted documents after
+  retrieval; an atomic lease/claim would be the next hardening step to guarantee
+  only one billed vector query under true concurrency.
+- Public history projection/limits and ANN tuning remain minor follow-up work.
+
+Fixup commit: pending at report update; the final response records the SHA.

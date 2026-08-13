@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "documents": [
+    { "id": "doc_7bridges", "filename": "7bridges-Pitch-Deck.pdf", "title": "7bridges Pitch Deck", "role": "deal_document", "company": "7bridges", "dealId": "deal_7bridges", "checksum": "698a582d94484808c419aab4602a72aa36612fdafebba56a690be3bea848d47a", "byteSize": 222590 },
+    { "id": "doc_100plus", "filename": "100Plus-Pitch-Deck.pdf", "title": "100Plus Pitch Deck", "role": "deal_document", "company": "100Plus", "dealId": "deal_100plus", "checksum": "19da3271e744515b4fa4cee7e3edf457675f65235e6e04de1efe68c101b56b42", "byteSize": 493880 },
+    { "id": "doc_1906", "filename": "1906-Pitch-Deck.pdf", "title": "1906 Pitch Deck", "role": "deal_document", "company": "1906", "dealId": "deal_1906", "checksum": "39ab6ab176e6ac52ac084eb3ca0317cdfd9c247297623554fb10a426779ea088", "byteSize": 2370153 },
+    { "id": "doc_a_champs", "filename": "A-Champs-Pitch-Deck.pdf", "title": "A-Champs Pitch Deck", "role": "deal_document", "company": "A-Champs", "dealId": "deal_a_champs", "checksum": "7141e76e4ef7c4841288ecdb6c6615d58f7dc8b1822c7a9b452ceaff31f17420", "byteSize": 245035 },
+    { "id": "doc_ably", "filename": "Ably-Pitch-Deck.pdf", "title": "Ably Pitch Deck", "role": "deal_document", "company": "Ably", "dealId": "deal_ably", "checksum": "94bfc9dd6f07119d6940a1fe2a695fa90ef7c371f2e30d0fba05c4bc736b9b4b", "byteSize": 352945 },
+    { "id": "doc_acin", "filename": "Acin-Pitch-Deck.pdf", "title": "Acin Pitch Deck", "role": "deal_document", "company": "Acin", "dealId": "deal_acin", "checksum": "29eb7a5b6d58632f7118e696e3b58259ab9471ae2b0921b471aeb2deb43aa988", "byteSize": 361738 },
+    { "id": "doc_acquco", "filename": "Acquco-Pitch-Deck.pdf", "title": "Acquco Pitch Deck", "role": "deal_document", "company": "Acquco", "dealId": "deal_acquco", "checksum": "39e4bdef030541dacd57f545943f27b6e179b891684bd1dbe88119e871b11a8e", "byteSize": 200260 },
+    { "id": "doc_ada_health", "filename": "Ada-Health-Pitch-Deck.pdf", "title": "Ada Health Pitch Deck", "role": "deal_document", "company": "Ada Health", "dealId": "deal_ada_health", "checksum": "e2e0d053252c2f4e2d9c4e066457baf5ff3cea9320a1f208e305628a19d92d6a", "byteSize": 212385 },
+    {
+      "id": "doc_pitch_combined",
+      "filename": "Pitch-combined-InterTwin-AI.pdf",
+      "title": "Combined Startup One-Pagers",
+      "role": "deal_document",
+      "deals": [
+        { "company": "InterTwin.ai", "dealId": "deal_intertwin_ai", "page": 1 },
+        { "company": "UniKudo", "dealId": "deal_unikudo", "page": 2 },
+        { "company": "Mirror", "dealId": "deal_mirror", "page": 3 },
+        { "company": "CouPro", "dealId": "deal_coupro", "page": 4 },
+        { "company": "IndieShow", "dealId": "deal_indieshow", "page": 5 },
+        { "company": "HuMetric", "dealId": "deal_humetric", "page": 6 },
+        { "company": "Alpha Builders", "dealId": "deal_alpha_builders", "page": 7 },
+        { "company": "INNFormNest", "dealId": "deal_innformnest", "page": 8 },
+        { "company": "SilverMemory", "dealId": "deal_silvermemory", "page": 9 },
+        { "company": "Kanesh", "dealId": "deal_kanesh", "page": 10 },
+        { "company": "Fellowtrip", "dealId": "deal_fellowtrip", "page": 11 }
+      ],
+      "checksum": "8d70a43a869658105c104fcb711f3323032f07819267e54e474833e185c2e979",
+      "byteSize": 8391810
+    },
+    { "id": "report_venture_outlook_2026", "filename": "2026-US-Venture-Capital-Outlook-Midyear-Update.pdf", "title": "2026 US Venture Capital Outlook — Midyear Update", "role": "market_report", "checksum": "a817f4352e539fb54aa1b58d9f2fb2721900a09636cda7806e54654d14f164cb", "byteSize": 693350 },
+    { "id": "report_ai_vc_trends_q1_2026", "filename": "Q1-2026-AI-VC-Trends.pdf", "title": "Q1 2026 AI VC Trends", "role": "market_report", "checksum": "087566845aaf80aa63fc434413d18d597c59a65b9f92416ea767999b8d24391f", "byteSize": 4204110 },
+    { "id": "report_robotics_physical_ai_q1_2026", "filename": "Q1-2026-Robotics-and-Physical-AI-VC-Trends.pdf", "title": "Q1 2026 Robotics and Physical AI VC Trends", "role": "market_report", "checksum": "3f082b87dc1e8ae2616bdf684d9b7396b2d1d2984714ada5ae5f1b846d1490b5", "byteSize": 2243486 },
+    { "id": "report_silicon_photonics_2024", "filename": "Silicon-Photonics-2024-SOI-SiN-LNO.pdf", "title": "Silicon Photonics 2024: SOI, SiN and LNO", "role": "market_report", "checksum": "dabf8c3049e6138359e3ebabe237895c118b71d60f10ec34190a4b5820726cbc", "byteSize": 26911966 },
+    { "id": "reference_vc_brain", "filename": "The-VC-Brain.pdf", "title": "The VC Brain", "role": "reference", "checksum": "e225b5c65fd84617373ef86b5737d29fff0ff45994f3013df03f2a4acd9a89a9", "byteSize": 826697 }
+  ]
+}

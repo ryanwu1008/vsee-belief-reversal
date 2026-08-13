@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "authorizedBy": "project-owner",
+  "authorizedAt": "2026-08-13T23:15:00.000Z",
+  "scope": "seed-manifest-v1-documents",
+  "visibility": "public",
+  "documentCount": 14,
+  "statement": "The project owner explicitly authorized the pitch decks and documents listed in manifest.json for public hackathon demonstration.",
+  "exclusions": [
+    "Live XTrace memories not present in this repository",
+    "Supabase records or objects not included in the committed seed corpus",
+    "Credentials, signed URLs, provider embeddings, and private account data"
+  ]
+}

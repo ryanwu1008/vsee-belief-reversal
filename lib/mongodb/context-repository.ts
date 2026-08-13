@@ -221,7 +221,7 @@ const LEGACY_CORPUS = [
 ] as const satisfies readonly (readonly [string, string, string, "pitch_deck" | "document", string, string])[];
 
 const LEGACY_CORPUS_BASE_URL =
-  "https://raw.githubusercontent.com/ryanwu1008/vsee-belief-reversal/15d87de30bd15fb567ee615f9fc03fd22b480b80/public/source-corpus";
+  "https://github.com/ryanwu1008/vsee-belief-reversal/blob/15d87de30bd15fb567ee615f9fc03fd22b480b80/public/source-corpus";
 
 function defaultProvenance(unit: {
   id: string;

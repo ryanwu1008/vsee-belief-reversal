@@ -12,6 +12,7 @@ import {
 import { deriveDecision, retrieveContext, resumeRun } from "../context-loop/engine.ts";
 import type { ContextUnit, Decision, RetrievalAudit, Run } from "../context-loop/types.ts";
 import type { PriorDecision } from "../context-loop/types.ts";
+import type { PartnerMemo } from "../fireworks/types.ts";
 
 export type PersistenceMode = "mongodb" | "fixture";
 
@@ -82,6 +83,13 @@ export interface ContextRepository {
   run(idempotencyKey: string): Promise<DemoRun>;
   interrupt(idempotencyKey: string): Promise<DemoRun>;
   resume(runId: string): Promise<DemoRun>;
+  getCompletedAudit(runId: string): Promise<DemoAudit>;
+  findPartnerMemo(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<PartnerMemo | null>;
+  savePartnerMemo(memo: PartnerMemo): Promise<PartnerMemo>;
 }
 
 function clone<T>(value: T): T {
@@ -160,6 +168,7 @@ export class InMemoryContextRepository implements ContextRepository {
   private units: ContextUnit[];
   private runs: DemoRun[] = [];
   private audits: DemoAudit[] = [];
+  private memos: PartnerMemo[] = [];
 
   constructor(units: readonly ContextUnit[] = DEMO_CONTEXT_UNITS) {
     this.units = clone([...units]);
@@ -192,6 +201,7 @@ export class InMemoryContextRepository implements ContextRepository {
     this.units = clone([...DEMO_CONTEXT_UNITS]);
     this.runs = [];
     this.audits = [];
+    this.memos = [];
     return this.getSnapshot();
   }
 
@@ -241,6 +251,47 @@ export class InMemoryContextRepository implements ContextRepository {
     return clone(completed);
   }
 
+  async getCompletedAudit(runId: string): Promise<DemoAudit> {
+    const run = this.runs.find(
+      (candidate) => candidate.id === runId && candidate.status === "completed",
+    );
+    if (!run?.retrievalAuditId) throw new Error("Completed run was not found.");
+    const audit = this.audits.find(
+      (candidate) => candidate.id === run.retrievalAuditId,
+    );
+    if (!audit) throw new Error("Stored retrieval audit is missing.");
+    return clone(audit);
+  }
+
+  async findPartnerMemo(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<PartnerMemo | null> {
+    const memo = this.memos.find(
+      (candidate) =>
+        candidate.workspaceId === DEMO_SCOPE.workspaceId &&
+        candidate.dealId === DEMO_SCOPE.dealId &&
+        candidate.provider === "fireworks" &&
+        candidate.auditId === auditId &&
+        candidate.packetHash === packetHash &&
+        candidate.model === model,
+    );
+    return memo ? clone(memo) : null;
+  }
+
+  async savePartnerMemo(memo: PartnerMemo): Promise<PartnerMemo> {
+    const existing = await this.findPartnerMemo(
+      memo.auditId,
+      memo.packetHash,
+      memo.model,
+    );
+    if (existing) return existing;
+    const scoped = { ...memo, ...DEMO_SCOPE, provider: "fireworks" as const };
+    this.memos.push(clone(scoped));
+    return clone(scoped);
+  }
+
   private async execute(idempotencyKey: string, interrupt: boolean): Promise<DemoRun> {
     const existing = this.runs.find((run) => run.idempotencyKey === idempotencyKey);
     if (existing) return clone(existing);
@@ -285,12 +336,14 @@ export class MongoContextRepository implements ContextRepository {
   private readonly units: Collection<StoredContext>;
   private readonly runs: Collection<DemoRun>;
   private readonly audits: Collection<DemoAudit>;
+  private readonly updates: Collection<PartnerMemo>;
 
   constructor(database: Db) {
     this.database = database;
     this.units = database.collection<StoredContext>("context_units");
     this.runs = database.collection<DemoRun>("agent_runs");
     this.audits = database.collection<DemoAudit>("retrieval_audits");
+    this.updates = database.collection<PartnerMemo>("decision_updates");
   }
 
   async getSnapshot(): Promise<DemoSnapshot> {
@@ -456,6 +509,64 @@ export class MongoContextRepository implements ContextRepository {
     };
     await this.runs.replaceOne({ id: run.id, ...DEMO_SCOPE }, completed);
     return completed;
+  }
+
+  async getCompletedAudit(runId: string): Promise<DemoAudit> {
+    const run = await this.runs.findOne({
+      id: runId,
+      ...DEMO_SCOPE,
+      status: "completed",
+    });
+    if (!run?.retrievalAuditId) throw new Error("Completed run was not found.");
+    const audit = await this.audits.findOne({
+      id: run.retrievalAuditId,
+      ...DEMO_SCOPE,
+    });
+    if (!audit) throw new Error("Stored retrieval audit is missing.");
+    return audit;
+  }
+
+  async findPartnerMemo(
+    auditId: string,
+    packetHash: string,
+    model: string,
+  ): Promise<PartnerMemo | null> {
+    return this.updates.findOne({
+      ...DEMO_SCOPE,
+      provider: "fireworks",
+      model,
+      auditId,
+      packetHash,
+    });
+  }
+
+  async savePartnerMemo(memo: PartnerMemo): Promise<PartnerMemo> {
+    await this.updates.createIndex(
+      {
+        workspaceId: 1,
+        dealId: 1,
+        provider: 1,
+        model: 1,
+        auditId: 1,
+        packetHash: 1,
+      },
+      { unique: true },
+    );
+    const filter = {
+      ...DEMO_SCOPE,
+      provider: "fireworks" as const,
+      model: memo.model,
+      auditId: memo.auditId,
+      packetHash: memo.packetHash,
+    };
+    await this.updates.updateOne(
+      filter,
+      { $setOnInsert: { ...memo, ...DEMO_SCOPE, provider: "fireworks" } },
+      { upsert: true },
+    );
+    const stored = await this.updates.findOne(filter);
+    if (!stored) throw new Error("Partner memo could not be persisted.");
+    return stored;
   }
 
   private async execute(idempotencyKey: string, interrupt: boolean): Promise<DemoRun> {

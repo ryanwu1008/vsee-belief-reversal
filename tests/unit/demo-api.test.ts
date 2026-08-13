@@ -113,6 +113,9 @@ test("API errors are sanitized before reaching public responses", async () => {
     run: fail,
     interrupt: fail,
     resume: fail,
+    getCompletedAudit: fail,
+    findPartnerMemo: fail,
+    savePartnerMemo: fail,
   };
 
   const response = await handleGetDemo(repository);
